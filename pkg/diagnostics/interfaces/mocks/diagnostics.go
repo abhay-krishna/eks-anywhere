@@ -232,17 +232,17 @@ func (mr *MockDiagnosticBundleMockRecorder) PrintBundleConfig() *gomock.Call {
 }
 
 // WithDatacenterConfig mocks base method.
-func (m *MockDiagnosticBundle) WithDatacenterConfig(config v1alpha1.Ref) *diagnostics.EksaDiagnosticBundle {
+func (m *MockDiagnosticBundle) WithDatacenterConfig(config v1alpha1.Ref, spec *cluster.Spec) *diagnostics.EksaDiagnosticBundle {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WithDatacenterConfig", config)
+	ret := m.ctrl.Call(m, "WithDatacenterConfig", config, spec)
 	ret0, _ := ret[0].(*diagnostics.EksaDiagnosticBundle)
 	return ret0
 }
 
 // WithDatacenterConfig indicates an expected call of WithDatacenterConfig.
-func (mr *MockDiagnosticBundleMockRecorder) WithDatacenterConfig(config interface{}) *gomock.Call {
+func (mr *MockDiagnosticBundleMockRecorder) WithDatacenterConfig(config, spec interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WithDatacenterConfig", reflect.TypeOf((*MockDiagnosticBundle)(nil).WithDatacenterConfig), config)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WithDatacenterConfig", reflect.TypeOf((*MockDiagnosticBundle)(nil).WithDatacenterConfig), config, spec)
 }
 
 // WithDefaultAnalyzers mocks base method.
@@ -285,6 +285,20 @@ func (m *MockDiagnosticBundle) WithExternalEtcd(config *v1alpha1.ExternalEtcdCon
 func (mr *MockDiagnosticBundleMockRecorder) WithExternalEtcd(config interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WithExternalEtcd", reflect.TypeOf((*MockDiagnosticBundle)(nil).WithExternalEtcd), config)
+}
+
+// WithFileCollectors mocks base method.
+func (m *MockDiagnosticBundle) WithFileCollectors(paths []string) *diagnostics.EksaDiagnosticBundle {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WithFileCollectors", paths)
+	ret0, _ := ret[0].(*diagnostics.EksaDiagnosticBundle)
+	return ret0
+}
+
+// WithFileCollectors indicates an expected call of WithFileCollectors.
+func (mr *MockDiagnosticBundleMockRecorder) WithFileCollectors(paths interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WithFileCollectors", reflect.TypeOf((*MockDiagnosticBundle)(nil).WithFileCollectors), paths)
 }
 
 // WithGitOpsConfig mocks base method.
@@ -531,17 +545,17 @@ func (m *MockCollectorFactory) EXPECT() *MockCollectorFactoryMockRecorder {
 }
 
 // DataCenterConfigCollectors mocks base method.
-func (m *MockCollectorFactory) DataCenterConfigCollectors(datacenter v1alpha1.Ref) []*diagnostics.Collect {
+func (m *MockCollectorFactory) DataCenterConfigCollectors(datacenter v1alpha1.Ref, spec *cluster.Spec) []*diagnostics.Collect {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DataCenterConfigCollectors", datacenter)
+	ret := m.ctrl.Call(m, "DataCenterConfigCollectors", datacenter, spec)
 	ret0, _ := ret[0].([]*diagnostics.Collect)
 	return ret0
 }
 
 // DataCenterConfigCollectors indicates an expected call of DataCenterConfigCollectors.
-func (mr *MockCollectorFactoryMockRecorder) DataCenterConfigCollectors(datacenter interface{}) *gomock.Call {
+func (mr *MockCollectorFactoryMockRecorder) DataCenterConfigCollectors(datacenter, spec interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DataCenterConfigCollectors", reflect.TypeOf((*MockCollectorFactory)(nil).DataCenterConfigCollectors), datacenter)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DataCenterConfigCollectors", reflect.TypeOf((*MockCollectorFactory)(nil).DataCenterConfigCollectors), datacenter, spec)
 }
 
 // DefaultCollectors mocks base method.
@@ -570,6 +584,20 @@ func (m *MockCollectorFactory) EksaHostCollectors(configs []providers.MachineCon
 func (mr *MockCollectorFactoryMockRecorder) EksaHostCollectors(configs interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EksaHostCollectors", reflect.TypeOf((*MockCollectorFactory)(nil).EksaHostCollectors), configs)
+}
+
+// FileCollectors mocks base method.
+func (m *MockCollectorFactory) FileCollectors(paths []string) []*diagnostics.Collect {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FileCollectors", paths)
+	ret0, _ := ret[0].([]*diagnostics.Collect)
+	return ret0
+}
+
+// FileCollectors indicates an expected call of FileCollectors.
+func (mr *MockCollectorFactoryMockRecorder) FileCollectors(paths interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FileCollectors", reflect.TypeOf((*MockCollectorFactory)(nil).FileCollectors), paths)
 }
 
 // ManagementClusterCollectors mocks base method.

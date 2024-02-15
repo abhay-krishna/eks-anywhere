@@ -4,34 +4,31 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"strconv"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	anywherev1 "github.com/aws/eks-anywhere/pkg/api/v1alpha1"
+	"github.com/aws/eks-anywhere/pkg/cluster"
+	"github.com/aws/eks-anywhere/pkg/constants"
 	"github.com/aws/eks-anywhere/pkg/logger"
+	"github.com/aws/eks-anywhere/pkg/networkutils"
 	"github.com/aws/eks-anywhere/pkg/providers/cloudstack/decoder"
+	"github.com/aws/eks-anywhere/pkg/types"
 )
 
 type Validator struct {
-	cmk ProviderCmkClient
+	cmk         ProviderCmkClient
+	netClient   networkutils.NetClient
+	skipIpCheck bool
 }
 
-// Taken from https://github.com/shapeblue/cloudstack/blob/08bb4ad9fea7e422c3d3ac6d52f4670b1e89eed7/api/src/main/java/com/cloud/vm/VmDetailConstants.java
-// These fields should be modeled separately in eks-a and not used by the additionalDetails cloudstack VM field
-var restrictedUserCustomDetails = [...]string{
-	"keyboard", "cpu.corespersocket", "rootdisksize", "boot.mode", "nameonhypervisor",
-	"nicAdapter", "rootDiskController", "dataDiskController", "svga.vramSize", "nestedVirtualizationFlag", "ramReservation",
-	"hypervisortoolsversion", "platform", "timeoffset", "kvm.vnc.port", "kvm.vnc.address", "video.hardware", "video.ram",
-	"smc.present", "firmware", "cpuNumber", "cpuSpeed", "memory", "cpuOvercommitRatio", "memoryOvercommitRatio",
-	"Message.ReservedCapacityFreed.Flag", "deployvm", "SSH.PublicKey", "SSH.KeyPairNames", "password", "Encrypted.Password",
-	"configDriveLocation", "nic", "network", "ip4Address", "ip6Address", "disk", "diskOffering", "configurationId",
-	"keypairnames", "controlNodeLoginUser",
-}
-
-func NewValidator(cmk ProviderCmkClient) *Validator {
+func NewValidator(cmk ProviderCmkClient, netClient networkutils.NetClient, skipIpCheck bool) *Validator {
 	return &Validator{
-		cmk: cmk,
+		cmk:         cmk,
+		netClient:   netClient,
+		skipIpCheck: skipIpCheck,
 	}
 }
 
@@ -41,9 +38,9 @@ type localAvailabilityZone struct {
 	DomainId string
 }
 
+// ProviderCmkClient defines the methods used by Cmk as a separate interface to be mockable when injected into other objects.
 type ProviderCmkClient interface {
 	GetManagementApiEndpoint(profile string) (string, error)
-	ValidateCloudStackConnection(ctx context.Context, profile string) error
 	ValidateServiceOfferingPresent(ctx context.Context, profile string, zoneId string, serviceOffering anywherev1.CloudStackResourceIdentifier) error
 	ValidateDiskOfferingPresent(ctx context.Context, profile string, zoneId string, diskOffering anywherev1.CloudStackResourceDiskOffering) error
 	ValidateTemplatePresent(ctx context.Context, profile string, domainId string, zoneId string, account string, template anywherev1.CloudStackResourceIdentifier) error
@@ -54,25 +51,6 @@ type ProviderCmkClient interface {
 	ValidateAccountPresent(ctx context.Context, profile string, account string, domainId string) error
 }
 
-func (v *Validator) validateCloudStackAccess(ctx context.Context, datacenterConfig *anywherev1.CloudStackDatacenterConfig) error {
-	refNamesToCheck := []string{}
-	if len(datacenterConfig.Spec.Domain) > 0 {
-		refNamesToCheck = append(refNamesToCheck, decoder.CloudStackGlobalAZ)
-	}
-	for _, az := range datacenterConfig.Spec.AvailabilityZones {
-		refNamesToCheck = append(refNamesToCheck, az.CredentialsRef)
-	}
-
-	for _, refName := range refNamesToCheck {
-		if err := v.cmk.ValidateCloudStackConnection(ctx, refName); err != nil {
-			return fmt.Errorf("validating connection to cloudstack %s: %v", refName, err)
-		}
-	}
-
-	logger.MarkPass(fmt.Sprintf("Connected to servers: %s", strings.Join(refNamesToCheck, ", ")))
-	return nil
-}
-
 func (v *Validator) ValidateCloudStackDatacenterConfig(ctx context.Context, datacenterConfig *anywherev1.CloudStackDatacenterConfig) error {
 	localAvailabilityZones, err := generateLocalAvailabilityZones(ctx, datacenterConfig)
 	if err != nil {
@@ -80,11 +58,6 @@ func (v *Validator) ValidateCloudStackDatacenterConfig(ctx context.Context, data
 	}
 
 	for _, az := range localAvailabilityZones {
-		_, err := getHostnameFromUrl(az.ManagementApiEndpoint)
-		if err != nil {
-			return fmt.Errorf("checking management api endpoint: %v", err)
-		}
-
 		endpoint, err := v.cmk.GetManagementApiEndpoint(az.CredentialsRef)
 		if err != nil {
 			return err
@@ -108,9 +81,6 @@ func (v *Validator) ValidateCloudStackDatacenterConfig(ctx context.Context, data
 		if err != nil {
 			return err
 		}
-		if len(az.CloudStackAvailabilityZone.Zone.Network.Id) == 0 && len(az.CloudStackAvailabilityZone.Zone.Network.Name) == 0 {
-			return fmt.Errorf("zone network is not set or is empty")
-		}
 		if err := v.cmk.ValidateNetworkPresent(ctx, az.CredentialsRef, az.DomainId, az.CloudStackAvailabilityZone.Zone.Network, zoneId, az.Account); err != nil {
 			return err
 		}
@@ -126,22 +96,6 @@ func generateLocalAvailabilityZones(ctx context.Context, datacenterConfig *anywh
 	if datacenterConfig == nil {
 		return nil, errors.New("CloudStack Datacenter Config is null")
 	}
-
-	if len(datacenterConfig.Spec.Domain) > 0 {
-		for index, zone := range datacenterConfig.Spec.Zones {
-			availabilityZone := localAvailabilityZone{
-				CloudStackAvailabilityZone: &anywherev1.CloudStackAvailabilityZone{
-					Name:                  fmt.Sprintf("availability-zone-%d", index),
-					CredentialsRef:        decoder.CloudStackGlobalAZ,
-					Domain:                datacenterConfig.Spec.Domain,
-					Account:               datacenterConfig.Spec.Account,
-					ManagementApiEndpoint: datacenterConfig.Spec.ManagementApiEndpoint,
-					Zone:                  zone,
-				},
-			}
-			localAvailabilityZones = append(localAvailabilityZones, availabilityZone)
-		}
-	}
 	for _, az := range datacenterConfig.Spec.AvailabilityZones {
 		availabilityZone := localAvailabilityZone{
 			CloudStackAvailabilityZone: &az,
@@ -155,90 +109,51 @@ func generateLocalAvailabilityZones(ctx context.Context, datacenterConfig *anywh
 	return localAvailabilityZones, nil
 }
 
-// TODO: dry out machine configs validations
-func (v *Validator) ValidateClusterMachineConfigs(ctx context.Context, cloudStackClusterSpec *Spec) error {
-	if len(cloudStackClusterSpec.Cluster.Spec.ControlPlaneConfiguration.Endpoint.Host) <= 0 {
-		return fmt.Errorf("cluster controlPlaneConfiguration.Endpoint.Host is not set or is empty")
-	}
-	if cloudStackClusterSpec.Cluster.Spec.ControlPlaneConfiguration.MachineGroupRef == nil {
-		return fmt.Errorf("must specify machineGroupRef for control plane")
-	}
-
-	controlPlaneMachineConfig := cloudStackClusterSpec.controlPlaneMachineConfig()
+// TODO: dry out machine configs validations.
+// Cyclomatic complexity is high. The exception below can probably be removed once the above todo is done.
+// nolint:gocyclo
+func (v *Validator) ValidateClusterMachineConfigs(ctx context.Context, clusterSpec *cluster.Spec) error {
+	controlPlaneMachineConfig := controlPlaneMachineConfig(clusterSpec)
 	if controlPlaneMachineConfig == nil {
-		return fmt.Errorf("cannot find CloudStackMachineConfig %v for control plane", cloudStackClusterSpec.Cluster.Spec.ControlPlaneConfiguration.MachineGroupRef.Name)
+		return fmt.Errorf("cannot find CloudStackMachineConfig %v for control plane", clusterSpec.Cluster.Spec.ControlPlaneConfiguration.MachineGroupRef.Name)
 	}
 
-	if cloudStackClusterSpec.Cluster.Spec.ExternalEtcdConfiguration != nil {
-		if cloudStackClusterSpec.Cluster.Spec.ExternalEtcdConfiguration.MachineGroupRef == nil {
-			return fmt.Errorf("must specify machineGroupRef for etcd machines")
-		}
-		etcdMachineConfig := cloudStackClusterSpec.etcdMachineConfig()
+	// validate template field name contains cluster kubernetes version for the control plane machine.
+	if err := v.validateTemplateMatchesKubernetesVersion(ctx, controlPlaneMachineConfig.Spec.Template.Name, string(clusterSpec.Cluster.Spec.KubernetesVersion)); err != nil {
+		return fmt.Errorf("machine config %s validation failed: %v", controlPlaneMachineConfig.Name, err)
+	}
+
+	if clusterSpec.Cluster.Spec.ExternalEtcdConfiguration != nil {
+		etcdMachineConfig := etcdMachineConfig(clusterSpec)
 		if etcdMachineConfig == nil {
-			return fmt.Errorf("cannot find CloudStackMachineConfig %v for etcd machines", cloudStackClusterSpec.Cluster.Spec.ExternalEtcdConfiguration.MachineGroupRef.Name)
+			return fmt.Errorf("cannot find CloudStackMachineConfig %v for etcd machines", clusterSpec.Cluster.Spec.ExternalEtcdConfiguration.MachineGroupRef.Name)
 		}
-		if etcdMachineConfig.Spec.Template != controlPlaneMachineConfig.Spec.Template {
-			return fmt.Errorf("control plane and etcd machines must have the same template specified")
+		// validate template field name contains cluster kubernetes version for the external etcd machine.
+		if err := v.validateTemplateMatchesKubernetesVersion(ctx, etcdMachineConfig.Spec.Template.Name, string(clusterSpec.Cluster.Spec.KubernetesVersion)); err != nil {
+			return fmt.Errorf("machine config %s validation failed: %v", etcdMachineConfig.Name, err)
 		}
 	}
 
-	if cloudStackClusterSpec.datacenterConfig.Namespace != cloudStackClusterSpec.Cluster.Namespace {
-		return fmt.Errorf(
-			"CloudStackDatacenterConfig and Cluster objects must have the same namespace: CloudstackDatacenterConfig namespace=%s; Cluster namespace=%s",
-			cloudStackClusterSpec.datacenterConfig.Namespace,
-			cloudStackClusterSpec.Cluster.Namespace,
-		)
-	}
-	for _, workerNodeGroupConfiguration := range cloudStackClusterSpec.Cluster.Spec.WorkerNodeGroupConfigurations {
-		if workerNodeGroupConfiguration.MachineGroupRef == nil {
-			return fmt.Errorf("must specify machineGroupRef for worker nodes")
-		}
-		workerNodeGroupMachineConfig, ok := cloudStackClusterSpec.machineConfigsLookup[workerNodeGroupConfiguration.MachineGroupRef.Name]
+	for _, workerNodeGroupConfiguration := range clusterSpec.Cluster.Spec.WorkerNodeGroupConfigurations {
+		_, ok := clusterSpec.CloudStackMachineConfigs[workerNodeGroupConfiguration.MachineGroupRef.Name]
 		if !ok {
 			return fmt.Errorf("cannot find CloudStackMachineConfig %v for worker nodes", workerNodeGroupConfiguration.MachineGroupRef.Name)
 		}
-		if controlPlaneMachineConfig.Spec.Template != workerNodeGroupMachineConfig.Spec.Template {
-			return fmt.Errorf("control plane and worker nodes must have the same template specified")
+
+		version := string(clusterSpec.Cluster.Spec.KubernetesVersion)
+		// validate template field of worker group spec with the kubernetes version of each workerNodeGroup - in case of modular upgrade.
+		if workerNodeGroupConfiguration.KubernetesVersion != nil {
+			version = string(*workerNodeGroupConfiguration.KubernetesVersion)
+		}
+		templateName := clusterSpec.CloudStackMachineConfigs[workerNodeGroupConfiguration.MachineGroupRef.Name].Spec.Template.Name
+		if err := v.validateTemplateMatchesKubernetesVersion(ctx, templateName, version); err != nil {
+			return fmt.Errorf("machine config %s validation failed: %v", workerNodeGroupConfiguration.Name, err)
 		}
 	}
 
-	isPortSpecified, err := v.validateControlPlaneHost(cloudStackClusterSpec.Cluster.Spec.ControlPlaneConfiguration.Endpoint.Host)
-	if err != nil {
-		return fmt.Errorf("failed to validate controlPlaneConfiguration.Endpoint.Host: %v", err)
-	}
-	if !isPortSpecified {
-		v.setDefaultControlPlanePort(cloudStackClusterSpec)
-	}
-
-	for _, machineConfig := range cloudStackClusterSpec.machineConfigsLookup {
-		if machineConfig.Namespace != cloudStackClusterSpec.Cluster.Namespace {
-			return fmt.Errorf(
-				"CloudStackMachineConfig %s and Cluster objects must have the same namespace: CloudStackMachineConfig namespace=%s; Cluster namespace=%s",
-				machineConfig.Name,
-				machineConfig.Namespace,
-				cloudStackClusterSpec.Cluster.Namespace,
-			)
-		}
-		if len(machineConfig.Spec.Users) <= 0 {
-			machineConfig.Spec.Users = []anywherev1.UserConfiguration{{}}
-		}
-		if len(machineConfig.Spec.Users[0].SshAuthorizedKeys) <= 0 {
-			machineConfig.Spec.Users[0].SshAuthorizedKeys = []string{""}
-		}
-		if len(machineConfig.Spec.ComputeOffering.Id) == 0 && len(machineConfig.Spec.ComputeOffering.Name) == 0 {
-			return fmt.Errorf("computeOffering is not set for CloudStackMachineConfig %s. Default computeOffering is not supported in CloudStack, please provide a computeOffering name or ID", machineConfig.Name)
-		}
-		if len(machineConfig.Spec.Template.Id) == 0 && len(machineConfig.Spec.Template.Name) == 0 {
-			return fmt.Errorf("template is not set for CloudStackMachineConfig %s. Default template is not supported in CloudStack, please provide a template name or ID", machineConfig.Name)
-		}
-		if err, fieldName, fieldValue := machineConfig.Spec.DiskOffering.Validate(); err != nil {
-			return fmt.Errorf("machine config %s validation failed: %s: %s invalid, %v", machineConfig.Name, fieldName, fieldValue, err)
-		}
-		if err = v.validateMachineConfig(ctx, cloudStackClusterSpec.datacenterConfig, machineConfig); err != nil {
+	for _, machineConfig := range clusterSpec.CloudStackMachineConfigs {
+		if err := v.validateMachineConfig(ctx, clusterSpec.CloudStackDatacenter, machineConfig); err != nil {
 			return fmt.Errorf("machine config %s validation failed: %v", machineConfig.Name, err)
-		}
-		if err = v.validateAffinityConfig(machineConfig); err != nil {
-			return err
 		}
 	}
 
@@ -247,25 +162,22 @@ func (v *Validator) ValidateClusterMachineConfigs(ctx context.Context, cloudStac
 	return nil
 }
 
-func (v *Validator) validateAffinityConfig(machineConfig *anywherev1.CloudStackMachineConfig) error {
-	if len(machineConfig.Spec.Affinity) > 0 && len(machineConfig.Spec.AffinityGroupIds) > 0 {
-		return fmt.Errorf("affinity and affinityGroupIds cannot be set at the same time for CloudStackMachineConfig %s. Please provide either one of them or none", machineConfig.Name)
+func (v *Validator) ValidateControlPlaneEndpointUniqueness(endpoint string) error {
+	if v.skipIpCheck {
+		logger.Info("Skipping control plane endpoint uniqueness check")
+		return nil
 	}
-	if len(machineConfig.Spec.Affinity) > 0 {
-		if machineConfig.Spec.Affinity != "pro" && machineConfig.Spec.Affinity != "anti" && machineConfig.Spec.Affinity != "no" {
-			return fmt.Errorf("invalid affinity type %s for CloudStackMachineConfig %s. Please provide \"pro\", \"anti\" or \"no\"", machineConfig.Spec.Affinity, machineConfig.Name)
-		}
+	host, port, err := getValidControlPlaneHostPort(endpoint)
+	if err != nil {
+		return fmt.Errorf("invalid endpoint: %v", err)
+	}
+	if networkutils.IsPortInUse(v.netClient, host, port) {
+		return fmt.Errorf("endpoint <%s> is already in use", endpoint)
 	}
 	return nil
 }
 
 func (v *Validator) validateMachineConfig(ctx context.Context, datacenterConfig *anywherev1.CloudStackDatacenterConfig, machineConfig *anywherev1.CloudStackMachineConfig) error {
-	for _, restrictedKey := range restrictedUserCustomDetails {
-		if _, found := machineConfig.Spec.UserCustomDetails[restrictedKey]; found {
-			return fmt.Errorf("restricted key %s found in custom user details", restrictedKey)
-		}
-	}
-
 	localAvailabilityZones, err := generateLocalAvailabilityZones(ctx, datacenterConfig)
 	if err != nil {
 		return err
@@ -283,8 +195,8 @@ func (v *Validator) validateMachineConfig(ctx context.Context, datacenterConfig 
 		if err := v.cmk.ValidateServiceOfferingPresent(ctx, az.CredentialsRef, zoneId, machineConfig.Spec.ComputeOffering); err != nil {
 			return fmt.Errorf("validating service offering: %v", err)
 		}
-		if len(machineConfig.Spec.DiskOffering.Id) > 0 || len(machineConfig.Spec.DiskOffering.Name) > 0 {
-			if err := v.cmk.ValidateDiskOfferingPresent(ctx, az.CredentialsRef, zoneId, machineConfig.Spec.DiskOffering); err != nil {
+		if machineConfig.Spec.DiskOffering != nil && (len(machineConfig.Spec.DiskOffering.Id) > 0 || len(machineConfig.Spec.DiskOffering.Name) > 0) {
+			if err := v.cmk.ValidateDiskOfferingPresent(ctx, az.CredentialsRef, zoneId, *machineConfig.Spec.DiskOffering); err != nil {
 				return fmt.Errorf("validating disk offering: %v", err)
 			}
 		}
@@ -298,26 +210,43 @@ func (v *Validator) validateMachineConfig(ctx context.Context, datacenterConfig 
 	return nil
 }
 
-// validateControlPlaneHost checks the input host to see if it is a valid hostname. If it's valid, it checks the port
-// or returns a boolean indicating that there was no port specified, in which case the default port should be used
-func (v *Validator) validateControlPlaneHost(pHost string) (bool, error) {
-	_, port, err := net.SplitHostPort(pHost)
-	if err != nil {
-		if strings.Contains(err.Error(), "missing port") {
-			return false, nil
-		} else {
-			return false, fmt.Errorf("host %s is invalid: %v", pHost, err.Error())
-		}
+func (v *Validator) validateTemplateMatchesKubernetesVersion(ctx context.Context, templateName string, kubernetesVersionName string) error {
+	// Replace 1.23, 1-23, 1_23 to 123 in the template name string.
+	templateReplacer := strings.NewReplacer("-", "", ".", "", "_", "")
+	template := templateReplacer.Replace(templateName)
+	// Replace 1-23 to 123 in the kubernetesversion string.
+	replacer := strings.NewReplacer(".", "")
+	kubernetesVersion := replacer.Replace(string(kubernetesVersionName))
+	// This will return an error if the template name does not contain specified kubernetes version.
+	// For ex if the kubernetes version is 1.23,
+	// the template name should include 1.23 or 1-23, 1_23 or 123 i.e. kubernetes-1-23-eks in the string.
+	if !strings.Contains(template, kubernetesVersion) {
+		return fmt.Errorf("missing kube version from the machine config template name: template=%s, version=%s", templateName, string(kubernetesVersionName))
 	}
-	_, err = strconv.Atoi(port)
-	if err != nil {
-		return false, fmt.Errorf("host %s has an invalid port: %v", pHost, err.Error())
-	}
-	return true, nil
+	return nil
 }
 
-func (v *Validator) setDefaultControlPlanePort(cloudStackClusterSpec *Spec) {
-	cloudStackClusterSpec.Cluster.Spec.ControlPlaneConfiguration.Endpoint.Host = fmt.Sprintf("%s:%s",
-		cloudStackClusterSpec.Cluster.Spec.ControlPlaneConfiguration.Endpoint.Host,
-		controlEndpointDefaultPort)
+// ValidateSecretsUnchanged checks the secret to see if it has not been changed.
+func (v *Validator) ValidateSecretsUnchanged(ctx context.Context, cluster *types.Cluster, execConfig *decoder.CloudStackExecConfig, client ProviderKubectlClient) error {
+	for _, profile := range execConfig.Profiles {
+		secret, err := client.GetSecretFromNamespace(ctx, cluster.KubeconfigFile, profile.Name, constants.EksaSystemNamespace)
+		if apierrors.IsNotFound(err) {
+			// When the secret is not found we allow for new secrets
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("getting secret for profile %s: %v", profile.Name, err)
+		}
+		if secretDifferentFromProfile(secret, profile) {
+			return fmt.Errorf("profile '%s' is different from the secret", profile.Name)
+		}
+	}
+	return nil
+}
+
+func secretDifferentFromProfile(secret *corev1.Secret, profile decoder.CloudStackProfileConfig) bool {
+	return string(secret.Data[decoder.APIUrlKey]) != profile.ManagementUrl ||
+		string(secret.Data[decoder.APIKeyKey]) != profile.ApiKey ||
+		string(secret.Data[decoder.SecretKeyKey]) != profile.SecretKey ||
+		string(secret.Data[decoder.VerifySslKey]) != profile.VerifySsl
 }

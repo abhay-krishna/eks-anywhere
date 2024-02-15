@@ -101,6 +101,10 @@ type Instance struct {
 	// +optional
 	NonRootVolumes []*Volume `json:"nonRootVolumes,omitempty"`
 
+	// Configuration options for the containers data volume
+	// +optional
+	ContainersVolume *Volume `json:"containersVolume,omitempty"`
+
 	// Specifies ENIs attached to instance
 	NetworkInterfaces []string `json:"networkInterfaces,omitempty"`
 
@@ -130,23 +134,10 @@ type Volume struct {
 	// +kubebuilder:validation:Minimum=8
 	Size int64 `json:"size"`
 
-	// Type is the type of the volume (e.g. gp2, io1, etc...).
+	// Type is the type of the volume (sbp1 for capacity-optimized HDD, sbg1 performance-optimized SSD, default is sbp1)
 	// +optional
+	// +kubebuilder:validation:Enum:=sbp1;sbg1
 	Type string `json:"type,omitempty"`
-
-	// IOPS is the number of IOPS requested for the disk. Not applicable to all types.
-	// +optional
-	IOPS int64 `json:"iops,omitempty"`
-
-	// Encrypted is whether the volume should be encrypted or not.
-	// +optional
-	Encrypted bool `json:"encrypted,omitempty"`
-
-	// EncryptionKey is the KMS key to use to encrypt the volume. Can be either a KMS key ID or ARN.
-	// If Encrypted is set and this is omitted, the default AWS key will be used.
-	// The key must already exist and be accessible by the controller.
-	// +optional
-	EncryptionKey string `json:"encryptionKey,omitempty"`
 }
 
 // InstanceState describes the state of an AWS instance.
@@ -203,3 +194,5 @@ type AWSSnowMachineTemplateResource struct {
 	// Spec is the specification of the desired behavior of the machine.
 	Spec AWSSnowMachineSpec `json:"spec"`
 }
+
+type OSFamily string

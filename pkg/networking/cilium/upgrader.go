@@ -7,11 +7,12 @@ import (
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/cluster"
 	"github.com/aws/eks-anywhere/pkg/logger"
-	"github.com/aws/eks-anywhere/pkg/templater"
+	"github.com/aws/eks-anywhere/pkg/semver"
 	"github.com/aws/eks-anywhere/pkg/types"
 )
 
-type upgraderClient interface {
+// KubernetesClient is a client to interact with the Kubernetes API.
+type KubernetesClient interface {
 	Apply(ctx context.Context, cluster *types.Cluster, data []byte) error
 	Delete(ctx context.Context, cluster *types.Cluster, data []byte) error
 	WaitForPreflightDaemonSet(ctx context.Context, cluster *types.Cluster) error
@@ -21,19 +22,36 @@ type upgraderClient interface {
 	RolloutRestartCiliumDaemonSet(ctx context.Context, cluster *types.Cluster) error
 }
 
-type Upgrader struct {
-	templater *Templater
-	client    upgraderClient
+// UpgradeTemplater generates a Cilium manifests for upgrade.
+type UpgradeTemplater interface {
+	GenerateUpgradePreflightManifest(ctx context.Context, spec *cluster.Spec) ([]byte, error)
+	GenerateManifest(ctx context.Context, spec *cluster.Spec, opts ...ManifestOpt) ([]byte, error)
 }
 
-func NewUpgrader(client Client, helm Helm) *Upgrader {
+// Upgrader allows to upgrade a Cilium installation in a EKS-A cluster.
+type Upgrader struct {
+	templater UpgradeTemplater
+	client    KubernetesClient
+
+	// skipUpgrade indicates Cilium upgrades should be skipped.
+	skipUpgrade bool
+}
+
+// NewUpgrader constructs a new Upgrader.
+func NewUpgrader(client KubernetesClient, templater UpgradeTemplater) *Upgrader {
 	return &Upgrader{
-		templater: NewTemplater(helm),
-		client:    newRetrier(client),
+		templater: templater,
+		client:    client,
 	}
 }
 
+// Upgrade configures a Cilium installation to match the desired state in the cluster Spec.
 func (u *Upgrader) Upgrade(ctx context.Context, cluster *types.Cluster, currentSpec, newSpec *cluster.Spec, namespaces []string) (*types.ChangeDiff, error) {
+	if u.skipUpgrade {
+		logger.V(1).Info("Cilium upgrade skipped")
+		return nil, nil
+	}
+
 	diff := ciliumChangeDiff(currentSpec, newSpec)
 	chartValuesChanged := ciliumHelmChartValuesChanged(currentSpec, newSpec)
 	if diff == nil && !chartValuesChanged {
@@ -65,21 +83,26 @@ func (u *Upgrader) Upgrade(ctx context.Context, cluster *types.Cluster, currentS
 		return nil, fmt.Errorf("failed deleting cilium preflight check: %v", err)
 	}
 
+	versionsBundle := currentSpec.RootVersionsBundle()
+
 	logger.V(3).Info("Generating Cilium upgrade manifest")
-	upgradeManifest, err := u.templater.GenerateUpgradeManifest(ctx, currentSpec, newSpec)
+	currentKubeVersion, err := getKubeVersionString(currentSpec, versionsBundle)
 	if err != nil {
 		return nil, err
 	}
 
-	if chartValuesChanged {
-		if newSpec.Cluster.Spec.ClusterNetwork.CNIConfig.Cilium.PolicyEnforcementMode == v1alpha1.CiliumPolicyModeAlways {
-			logger.V(3).Info("Installing NetworkPolicy resources for policy enforcement mode 'always'")
-			networkPolicyManifest, err := u.templater.GenerateNetworkPolicyManifest(newSpec, namespaces)
-			if err != nil {
-				return nil, err
-			}
-			upgradeManifest = templater.AppendYamlResources(upgradeManifest, networkPolicyManifest)
-		}
+	previousCiliumVersion, err := semver.New(versionsBundle.Cilium.Version)
+	if err != nil {
+		return nil, err
+	}
+
+	upgradeManifest, err := u.templater.GenerateManifest(ctx, newSpec,
+		WithKubeVersion(currentKubeVersion),
+		WithUpgradeFromVersion(*previousCiliumVersion),
+		WithPolicyAllowedNamespaces(namespaces),
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	logger.V(2).Info("Installing new Cilium version")
@@ -120,7 +143,9 @@ func (u *Upgrader) waitForCilium(ctx context.Context, cluster *types.Cluster) er
 }
 
 func ciliumChangeDiff(currentSpec, newSpec *cluster.Spec) *types.ChangeDiff {
-	if currentSpec.VersionsBundle.Cilium.Version == newSpec.VersionsBundle.Cilium.Version {
+	currentVersionsBundle := currentSpec.RootVersionsBundle()
+	newVersionsBundle := newSpec.RootVersionsBundle()
+	if currentVersionsBundle.Cilium.Version == newVersionsBundle.Cilium.Version {
 		return nil
 	}
 
@@ -128,8 +153,8 @@ func ciliumChangeDiff(currentSpec, newSpec *cluster.Spec) *types.ChangeDiff {
 		ComponentReports: []types.ComponentChangeDiff{
 			{
 				ComponentName: "cilium",
-				OldVersion:    currentSpec.VersionsBundle.Cilium.Version,
-				NewVersion:    newSpec.VersionsBundle.Cilium.Version,
+				OldVersion:    currentVersionsBundle.Cilium.Version,
+				NewVersion:    newVersionsBundle.Cilium.Version,
 			},
 		},
 	}
@@ -150,8 +175,12 @@ func ciliumHelmChartValuesChanged(currentSpec, newSpec *cluster.Spec) bool {
 		if newSpec.Cluster.Spec.ClusterNetwork.CNIConfig.Cilium.PolicyEnforcementMode != currentSpec.Cluster.Spec.ClusterNetwork.CNIConfig.Cilium.PolicyEnforcementMode {
 			return true
 		}
+		if newSpec.Cluster.Spec.ClusterNetwork.CNIConfig.Cilium.EgressMasqueradeInterfaces != currentSpec.Cluster.Spec.ClusterNetwork.CNIConfig.Cilium.EgressMasqueradeInterfaces {
+			return true
+		}
 	}
 	// we can add comparisons for more values here as we start accepting them from cluster spec
+
 	return false
 }
 
@@ -161,4 +190,9 @@ func (u *Upgrader) RunPostControlPlaneUpgradeSetup(ctx context.Context, cluster 
 		return fmt.Errorf("restarting cilium daemonset: %v", err)
 	}
 	return nil
+}
+
+// SetSkipUpgrade configures u to skip the upgrade process.
+func (u *Upgrader) SetSkipUpgrade(v bool) {
+	u.skipUpgrade = v
 }

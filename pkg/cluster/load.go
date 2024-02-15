@@ -2,7 +2,7 @@ package cluster
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 
 	"sigs.k8s.io/yaml"
 
@@ -21,7 +21,7 @@ func LoadManagement(kubeconfig string) (*types.Cluster, error) {
 	if kubeconfig == "" {
 		return nil, nil
 	}
-	kubeConfigBytes, err := ioutil.ReadFile(kubeconfig)
+	kubeConfigBytes, err := os.ReadFile(kubeconfig)
 	if err != nil {
 		return nil, err
 	}
@@ -37,8 +37,7 @@ func LoadManagement(kubeconfig string) (*types.Cluster, error) {
 	}
 
 	return &types.Cluster{
-		Name:               kc.Clusters[0].Name,
-		KubeconfigFile:     kubeconfig,
-		ExistingManagement: true,
+		Name:           kc.Clusters[0].Name,
+		KubeconfigFile: kubeconfig,
 	}, nil
 }

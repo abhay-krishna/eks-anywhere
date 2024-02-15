@@ -3,13 +3,12 @@ package api
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/yaml"
 
 	anywherev1 "github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/cluster"
-	"github.com/aws/eks-anywhere/pkg/templater"
 )
 
 type CloudStackConfig struct {
@@ -19,38 +18,22 @@ type CloudStackConfig struct {
 
 type CloudStackFiller func(config CloudStackConfig)
 
-func AutoFillCloudStackProvider(filename string, fillers ...CloudStackFiller) ([]byte, error) {
-	config, err := cluster.ParseConfigFromFile(filename)
-	if err != nil {
-		return nil, err
+// CloudStackToConfigFiller transforms a set of CloudStackFiller's in a single ClusterConfigFiller.
+func CloudStackToConfigFiller(fillers ...CloudStackFiller) ClusterConfigFiller {
+	return func(c *cluster.Config) {
+		updateCloudStack(c, fillers...)
 	}
+}
 
-	cloudStackConfig := CloudStackConfig{
+func updateCloudStack(config *cluster.Config, fillers ...CloudStackFiller) {
+	cc := CloudStackConfig{
 		datacenterConfig: config.CloudStackDatacenter,
 		machineConfigs:   config.CloudStackMachineConfigs,
 	}
 
 	for _, f := range fillers {
-		f(cloudStackConfig)
+		f(cc)
 	}
-
-	resources := make([]interface{}, 0, len(cloudStackConfig.machineConfigs)+1)
-	resources = append(resources, cloudStackConfig.datacenterConfig)
-	for _, m := range cloudStackConfig.machineConfigs {
-		resources = append(resources, m)
-	}
-
-	yamlResources := make([][]byte, 0, len(resources))
-	for _, r := range resources {
-		yamlContent, err := yaml.Marshal(r)
-		if err != nil {
-			return nil, fmt.Errorf("marshalling cloudstack resource: %v", err)
-		}
-
-		yamlResources = append(yamlResources, yamlContent)
-	}
-
-	return templater.AppendYamlResources(yamlResources...), nil
 }
 
 func WithCloudStackComputeOfferingForAllMachines(value string) CloudStackFiller {
@@ -61,9 +44,15 @@ func WithCloudStackComputeOfferingForAllMachines(value string) CloudStackFiller 
 	}
 }
 
-func WithCloudStackManagementServer(value string) CloudStackFiller {
+func WithCloudStackAz(az anywherev1.CloudStackAvailabilityZone) CloudStackFiller {
 	return func(config CloudStackConfig) {
-		config.datacenterConfig.Spec.ManagementApiEndpoint = value
+		config.datacenterConfig.Spec.AvailabilityZones = append(config.datacenterConfig.Spec.AvailabilityZones, az)
+	}
+}
+
+func RemoveCloudStackAzs() CloudStackFiller {
+	return func(config CloudStackConfig) {
+		config.datacenterConfig.Spec.AvailabilityZones = make([]anywherev1.CloudStackAvailabilityZone, 0)
 	}
 }
 
@@ -114,37 +103,59 @@ func WithCloudStackSSHAuthorizedKey(value string) CloudStackFiller {
 			if len(m.Spec.Users) == 0 {
 				m.Spec.Users = []anywherev1.UserConfiguration{{Name: "capc"}}
 			}
-			m.Spec.Users[0].SshAuthorizedKeys[0] = value
+			m.Spec.Users[0].SshAuthorizedKeys = []string{value}
 		}
 	}
 }
 
 func WithCloudStackDomain(value string) CloudStackFiller {
 	return func(config CloudStackConfig) {
-		config.datacenterConfig.Spec.Domain = value
+		for _, az := range config.datacenterConfig.Spec.AvailabilityZones {
+			az.Domain = value
+		}
 	}
 }
 
 func WithCloudStackAccount(value string) CloudStackFiller {
 	return func(config CloudStackConfig) {
-		config.datacenterConfig.Spec.Account = value
+		for _, az := range config.datacenterConfig.Spec.AvailabilityZones {
+			az.Account = value
+		}
 	}
 }
 
-func WithCloudStackZone(value string) CloudStackFiller {
+// WithCloudStackCredentialsRef returns a CloudStackFiller that updates the edentialsRef of all availability zones.
+func WithCloudStackCredentialsRef(value string) CloudStackFiller {
 	return func(config CloudStackConfig) {
-		config.datacenterConfig.Spec.Zones[0].Name = value
-	}
-}
+		zones := []anywherev1.CloudStackAvailabilityZone{}
+		for _, az := range config.datacenterConfig.Spec.AvailabilityZones {
+			az.CredentialsRef = value
+			zones = append(zones, az)
+		}
 
-func WithCloudStackNetwork(value string) CloudStackFiller {
-	return func(config CloudStackConfig) {
-		config.datacenterConfig.Spec.Zones[0].Network.Name = value
+		config.datacenterConfig.Spec.AvailabilityZones = zones
 	}
 }
 
 func WithCloudStackStringFromEnvVar(envVar string, opt func(string) CloudStackFiller) CloudStackFiller {
 	return opt(os.Getenv(envVar))
+}
+
+func WithCloudStackAzFromEnvVars(cloudstackAccountVar, cloudstackDomainVar, cloudstackZoneVar, cloudstackCredentialsVar, cloudstackNetworkVar, cloudstackManagementServerVar string, opt func(zone anywherev1.CloudStackAvailabilityZone) CloudStackFiller) CloudStackFiller {
+	az := anywherev1.CloudStackAvailabilityZone{
+		Name:           strings.ToLower(fmt.Sprintf("az-%s", os.Getenv(cloudstackZoneVar))),
+		CredentialsRef: os.Getenv(cloudstackCredentialsVar),
+		Zone: anywherev1.CloudStackZone{
+			Name: os.Getenv(cloudstackZoneVar),
+			Network: anywherev1.CloudStackResourceIdentifier{
+				Name: os.Getenv(cloudstackNetworkVar),
+			},
+		},
+		Domain:                os.Getenv(cloudstackDomainVar),
+		Account:               os.Getenv(cloudstackAccountVar),
+		ManagementApiEndpoint: os.Getenv(cloudstackManagementServerVar),
+	}
+	return opt(az)
 }
 
 func WithCloudStackMachineConfig(name string, fillers ...CloudStackMachineConfigFiller) CloudStackFiller {
@@ -164,5 +175,15 @@ func WithCloudStackMachineConfig(name string, fillers ...CloudStackMachineConfig
 		}
 
 		FillCloudStackMachineConfig(m, fillers...)
+	}
+}
+
+// WithCloudStackConfigNamespaceForAllMachinesAndDatacenter sets the namespace for all Machines and Datacenter objects.
+func WithCloudStackConfigNamespaceForAllMachinesAndDatacenter(ns string) CloudStackFiller {
+	return func(config CloudStackConfig) {
+		config.datacenterConfig.Namespace = ns
+		for _, m := range config.machineConfigs {
+			m.Namespace = ns
+		}
 	}
 }

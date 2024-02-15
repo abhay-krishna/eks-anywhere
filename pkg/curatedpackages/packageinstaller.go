@@ -3,14 +3,15 @@ package curatedpackages
 import (
 	"context"
 
+	anywherev1 "github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/cluster"
-	"github.com/aws/eks-anywhere/pkg/kubeconfig"
 	"github.com/aws/eks-anywhere/pkg/logger"
-	"github.com/aws/eks-anywhere/pkg/utils/urls"
 )
 
 type PackageController interface {
-	InstallController(ctx context.Context) error
+	// Enable curated packages support.
+	Enable(ctx context.Context) error
+	IsInstalled(ctx context.Context) bool
 }
 
 type PackageHandler interface {
@@ -21,51 +22,54 @@ type Installer struct {
 	packageController PackageController
 	spec              *cluster.Spec
 	packageClient     PackageHandler
+	kubectl           KubectlRunner
 	packagesLocation  string
+	mgmtKubeconfig    string
 }
 
-func NewInstaller(installer ChartInstaller, runner KubectlRunner, spec *cluster.Spec, packagesLocation string) *Installer {
-	pcc := newPackageController(installer, runner, spec)
+// IsPackageControllerDisabled detect if the package controller is disabled.
+func IsPackageControllerDisabled(cluster *anywherev1.Cluster) bool {
+	return cluster != nil && cluster.Spec.Packages != nil && cluster.Spec.Packages.Disable
+}
 
-	pc := NewPackageClient(
-		runner,
-	)
-
+// NewInstaller installs packageController and packages during cluster creation.
+func NewInstaller(runner KubectlRunner, pc PackageHandler, pcc PackageController, spec *cluster.Spec, packagesLocation, mgmtKubeconfig string) *Installer {
 	return &Installer{
 		spec:              spec,
 		packagesLocation:  packagesLocation,
 		packageController: pcc,
 		packageClient:     pc,
+		kubectl:           runner,
+		mgmtKubeconfig:    mgmtKubeconfig,
 	}
 }
 
-func newPackageController(installer ChartInstaller, runner KubectlRunner, spec *cluster.Spec) *PackageControllerClient {
-	kubeConfig := kubeconfig.FromClusterName(spec.Cluster.Name)
-
-	chart := spec.VersionsBundle.PackageController.HelmChart
-	imageUrl := urls.ReplaceHost(chart.Image(), spec.Cluster.RegistryMirror())
-	return NewPackageControllerClient(installer, runner, kubeConfig, imageUrl, chart.Name, chart.Tag())
-}
-
-func (pi *Installer) InstallCuratedPackages(ctx context.Context) error {
+// InstallCuratedPackages installs curated packages as part of the cluster creation.
+func (pi *Installer) InstallCuratedPackages(ctx context.Context) {
+	if IsPackageControllerDisabled(pi.spec.Cluster) {
+		logger.Info("  Package controller disabled")
+		return
+	}
 	PrintLicense()
 	err := pi.installPackagesController(ctx)
+	// There is an ask from customers to avoid considering the failure of installing curated packages
+	// controller as an error but rather a warning
 	if err != nil {
-		logger.MarkFail("Error when installing curated packages on workload cluster; please install through eksctl anywhere install packagecontroller command", "error", err)
-		return err
+		logger.MarkWarning("  Failed to install the optional EKS-A Curated Package Controller. Please try installation again through eksctl after the cluster creation succeeds", "warning", err)
+		return
 	}
 
+	// There is an ask from customers to avoid considering the failure of the installation of curated packages
+	// as an error but rather a warning
 	err = pi.installPackages(ctx)
 	if err != nil {
-		logger.MarkFail("Error when installing curated packages on workload cluster; please install through eksctl anywhere create packages command", "error", err)
-		return err
+		logger.MarkWarning("  Failed installing curated packages on the cluster; please install through eksctl anywhere create packages command after the cluster creation succeeds", "error", err)
 	}
-	return nil
 }
 
 func (pi *Installer) installPackagesController(ctx context.Context) error {
-	logger.Info("Installing curated packages controller on management cluster")
-	err := pi.packageController.InstallController(ctx)
+	logger.Info("Enabling curated packages on the cluster")
+	err := pi.packageController.Enable(ctx)
 	if err != nil {
 		return err
 	}
@@ -76,8 +80,7 @@ func (pi *Installer) installPackages(ctx context.Context) error {
 	if pi.packagesLocation == "" {
 		return nil
 	}
-	kubeConfig := kubeconfig.FromClusterName(pi.spec.Cluster.Name)
-	err := pi.packageClient.CreatePackages(ctx, pi.packagesLocation, kubeConfig)
+	err := pi.packageClient.CreatePackages(ctx, pi.packagesLocation, pi.mgmtKubeconfig)
 	if err != nil {
 		return err
 	}

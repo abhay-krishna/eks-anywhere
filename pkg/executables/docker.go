@@ -9,9 +9,13 @@ import (
 	"github.com/aws/eks-anywhere/pkg/logger"
 )
 
+// Temporary: Curated packages dev and prod accounts are currently hard coded
+// This is because there is no mechanism to extract these values as of now.
 const (
-	dockerPath      = "docker"
-	defaultRegistry = "public.ecr.aws"
+	dockerPath        = "docker"
+	defaultRegistry   = "public.ecr.aws"
+	packageProdDomain = "783794618700.dkr.ecr.us-west-2.amazonaws.com"
+	packageDevDomain  = "857151390494.dkr.ecr.us-west-2.amazonaws.com"
 )
 
 type Docker struct {
@@ -65,22 +69,9 @@ func (d *Docker) AllocatedMemory(ctx context.Context) (uint64, error) {
 	return strconv.ParseUint(totalMemory, 10, 64)
 }
 
-func (d *Docker) CgroupVersion(ctx context.Context) (int, error) {
-	cmdOutput, err := d.Execute(ctx, "info", "--format", "'{{json .CgroupVersion}}'")
-	if err != nil {
-		return 0, fmt.Errorf("please check if docker is installed and running %v", err)
-	}
-	cgroupVersion := strings.TrimSpace(cmdOutput.String())
-	cgroupVersion = strings.Trim(cgroupVersion, "\"'")
-	version, err := strconv.Atoi(cgroupVersion)
-	if err != nil {
-		return 0, err
-	}
-	return version, nil
-}
-
 func (d *Docker) TagImage(ctx context.Context, image string, endpoint string) error {
-	localImage := strings.ReplaceAll(image, defaultRegistry, endpoint)
+	replacer := strings.NewReplacer(defaultRegistry, endpoint, packageProdDomain, endpoint, packageDevDomain, endpoint)
+	localImage := replacer.Replace(image)
 	logger.Info("Tagging image", "image", image, "local image", localImage)
 	if _, err := d.Execute(ctx, "tag", image, localImage); err != nil {
 		return err
@@ -89,7 +80,8 @@ func (d *Docker) TagImage(ctx context.Context, image string, endpoint string) er
 }
 
 func (d *Docker) PushImage(ctx context.Context, image string, endpoint string) error {
-	localImage := strings.ReplaceAll(image, defaultRegistry, endpoint)
+	replacer := strings.NewReplacer(defaultRegistry, endpoint, packageProdDomain, endpoint, packageDevDomain, endpoint)
+	localImage := replacer.Replace(image)
 	logger.Info("Pushing", "image", localImage)
 	if _, err := d.Execute(ctx, "push", localImage); err != nil {
 		return err
@@ -146,7 +138,7 @@ func (d *Docker) ForceRemove(ctx context.Context, name string) error {
 }
 
 // CheckContainerExistence checks whether a Docker container with the provided name exists
-// It returns true if a container with the name exists, false if it doesn't and an error if it encounters some other error
+// It returns true if a container with the name exists, false if it doesn't and an error if it encounters some other error.
 func (d *Docker) CheckContainerExistence(ctx context.Context, name string) (bool, error) {
 	params := []string{"container", "inspect", name}
 

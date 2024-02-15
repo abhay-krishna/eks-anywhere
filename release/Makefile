@@ -28,6 +28,9 @@ SOURCE_BUCKET=projectbuildpipeline-857-pipelineoutputartifactsb-10ajmk30khe3f
 else
 DRY_RUN=false
 endif
+DATE_YYYYMMDD=$(shell date "+%F")
+WEEKLY?=false
+WEEKLY_RELEASES_URL_PREFIX=https://dev-release-assets.eks-anywhere.model-rocket.aws.dev/weekly-releases
 
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
@@ -42,8 +45,8 @@ GOBIN=$(shell go env GOBIN)
 endif
 
 # Setup Go
-GOLANG_VERSION?="1.17"
-GO_VERSION ?= $(shell source ../scripts/common.sh && build::common::get_go_path $(GOLANG_VERSION))
+GOLANG_VERSION?="1.21"
+GO_VERSION ?= $(shell source $(REPO_ROOT)/scripts/common.sh && build::common::get_go_path $(GOLANG_VERSION))
 GO ?= $(GO_VERSION)/go
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
@@ -83,6 +86,7 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=manager-role webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 	## Copy only the bundles crd to root config kustomization folder
 	cp -f config/crd/bases/anywhere.eks.amazonaws.com_bundles.yaml ../config/crd/bases/
+	cp -f config/crd/bases/anywhere.eks.amazonaws.com_eksareleases.yaml ../config/crd/bases/
 	@echo "Make sure to update the test bundle with \`make update-bundle-golden-files\`"
 
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -103,7 +107,7 @@ test: manifests generate fmt vet ## Run tests.
 ##@ Build
 
 build: clean fmt vet ## Build release binary.
-	$(GO) build -o bin/eks-anywhere-release main.go
+	$(GO) build -C cli -o $(REPO_ROOT)/release/bin/eks-anywhere-release github.com/aws/eks-anywhere/release/cli
 
 .PHONY: lint
 lint: bin/golangci-lint ## Run golangci-lint
@@ -118,8 +122,8 @@ unit-test: ## Run go test against code.
 	$(GO) test -count=1 ./...
 
 update-bundle-golden-files: ## Updates testdata files located under pkg/test/testdata
-	$(GO) test -count=1 ./pkg/operations -update
-	$(eval DIFF_LINE_COUNT=$(shell git diff pkg/test/testdata | wc -l))
+	$(GO) test -C cli -count=1 ./pkg/operations -update
+	$(eval DIFF_LINE_COUNT=$(shell git diff cli/pkg/test/testdata | wc -l))
 	@if [[ $(DIFF_LINE_COUNT) != 0 ]]; then \
 		printf "\n\033[33mWarning:\033[0m Testdata files have been updated! Ensure that these changes were intentional.\n"; \
 	fi
@@ -130,13 +134,20 @@ run: manifests generate fmt vet ## Run a controller from your host.
 ##@ Release
 
 dev-release: build ## Perform a dev release of EKS-A bundles and CLI manifests
-	scripts/release.sh $(REPO_ROOT)/release/downloaded-artifacts $(SOURCE_BUCKET) $(RELEASE_BUCKET) $(CDN) $(SOURCE_CONTAINER_REGISTRY) $(RELEASE_CONTAINER_REGISTRY) $(BUILD_REPO_URL) $(CLI_REPO_URL) $(BUILD_REPO_BRANCH_NAME) $(CLI_REPO_BRANCH_NAME) $(DRY_RUN)
+	scripts/release.sh $(REPO_ROOT)/release/downloaded-artifacts $(SOURCE_BUCKET) $(RELEASE_BUCKET) $(CDN) $(SOURCE_CONTAINER_REGISTRY) $(RELEASE_CONTAINER_REGISTRY) $(BUILD_REPO_URL) $(CLI_REPO_URL) $(BUILD_REPO_BRANCH_NAME) $(CLI_REPO_BRANCH_NAME) $(DRY_RUN) $(WEEKLY)
 
 bundle-release: build ## Perform EKS-A versioned bundles release
 	scripts/bundle-release.sh $(REPO_ROOT)/release/downloaded-artifacts $(SOURCE_BUCKET) $(RELEASE_BUCKET) $(CDN) $(BUNDLE_NUMBER) $(CLI_MIN_VERSION) $(CLI_MAX_VERSION) $(SOURCE_CONTAINER_REGISTRY) $(RELEASE_CONTAINER_REGISTRY) $(RELEASE_ENVIRONMENT) $(BUILD_REPO_BRANCH_NAME) $(CLI_REPO_BRANCH_NAME) $(BUILD_REPO_URL) $(CLI_REPO_URL)
 
 eks-a-release: build ## Perform EKS-A CLI release
 	scripts/eks-a-release.sh $(RELEASE_VERSION) $(REPO_ROOT)/release/downloaded-artifacts $(SOURCE_BUCKET) $(RELEASE_BUCKET) $(CDN) $(BUNDLE_NUMBER) $(RELEASE_NUMBER) $(RELEASE_ENVIRONMENT) $(CLI_REPO_BRANCH_NAME) $(BUILD_REPO_URL) $(CLI_REPO_URL)
+
+github-bundle-release:
+	scripts/github-bundle-release.sh $(REPO_ROOT)/release/downloaded-artifacts $(WEEKLY_RELEASES_URL_PREFIX)
+
+announce-eks-a-release: EKSA_RELEASE_MANIFEST_URL?=https://anywhere-assets.eks.amazonaws.com/releases/eks-a/manifest.yaml
+announce-eks-a-release:
+	scripts/announce_eksa_release.sh $(EKSA_RELEASE_MANIFEST_URL)
 
 ##@ Deployment
 

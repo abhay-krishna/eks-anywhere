@@ -24,17 +24,20 @@ var cmkConfigTemplate string
 const (
 	cmkPath                           = "cmk"
 	cmkConfigFileNameTemplate         = "cmk_%s.ini"
-	Shared                            = "Shared"
 	defaultCloudStackPreflightTimeout = "30"
 	rootDomain                        = "ROOT"
 	domainDelimiter                   = "/"
 )
 
-// Cmk this struct wraps around the CloudMonkey executable CLI to perform operations against a CloudStack endpoint
+// Cmk this struct wraps around the CloudMonkey executable CLI to perform operations against a CloudStack endpoint.
 type Cmk struct {
 	writer     filewriter.FileWriter
 	executable Executable
 	configMap  map[string]decoder.CloudStackProfileConfig
+}
+
+type listTemplatesResponse struct {
+	CmkTemplates []cmkTemplate `json:"template"`
 }
 
 func (c *Cmk) Close(ctx context.Context) error {
@@ -65,9 +68,7 @@ func (c *Cmk) ValidateTemplatePresent(ctx context.Context, profile string, domai
 		return fmt.Errorf("template %s not found", template)
 	}
 
-	response := struct {
-		CmkTemplates []cmkTemplate `json:"template"`
-	}{}
+	response := listTemplatesResponse{}
 	if err = json.Unmarshal(result.Bytes(), &response); err != nil {
 		return fmt.Errorf("parsing response into json: %v", err)
 	}
@@ -78,6 +79,37 @@ func (c *Cmk) ValidateTemplatePresent(ctx context.Context, profile string, domai
 		return fmt.Errorf("template %s not found", template)
 	}
 	return nil
+}
+
+// SearchTemplate looks for a template by name or by id and returns template name if found.
+func (c *Cmk) SearchTemplate(ctx context.Context, profile string, template v1alpha1.CloudStackResourceIdentifier) (string, error) {
+	command := newCmkCommand("list templates")
+	applyCmkArgs(&command, appendArgs("templatefilter=all"), appendArgs("listall=true"))
+	if len(template.Id) > 0 {
+		applyCmkArgs(&command, withCloudStackId(template.Id))
+	} else {
+		applyCmkArgs(&command, withCloudStackName(template.Name))
+	}
+
+	result, err := c.exec(ctx, profile, command...)
+	if err != nil {
+		return "", fmt.Errorf("getting templates info - %s: %v", result.String(), err)
+	}
+	if result.Len() == 0 {
+		return "", nil
+	}
+
+	response := listTemplatesResponse{}
+	if err = json.Unmarshal(result.Bytes(), &response); err != nil {
+		return "", fmt.Errorf("parsing response into json: %v", err)
+	}
+	templates := response.CmkTemplates
+	if len(templates) > 1 {
+		return "", fmt.Errorf("duplicate templates %s found", template)
+	} else if len(templates) == 0 {
+		return "", nil
+	}
+	return templates[0].Name, nil
 }
 
 func (c *Cmk) ValidateServiceOfferingPresent(ctx context.Context, profile string, zoneId string, serviceOffering v1alpha1.CloudStackResourceIdentifier) error {
@@ -338,17 +370,21 @@ func (c *Cmk) ValidateAccountPresent(ctx context.Context, profile string, accoun
 	return nil
 }
 
-func NewCmk(executable Executable, writer filewriter.FileWriter, configs []decoder.CloudStackProfileConfig) *Cmk {
-	configMap := map[string]decoder.CloudStackProfileConfig{}
-	for _, config := range configs {
-		configMap[config.Name] = config
+// NewCmk initializes CloudMonkey executable to query CloudStack via CLI.
+func NewCmk(executable Executable, writer filewriter.FileWriter, config *decoder.CloudStackExecConfig) (*Cmk, error) {
+	if config == nil {
+		return nil, fmt.Errorf("nil exec config for CloudMonkey, unable to proceed")
+	}
+	configMap := make(map[string]decoder.CloudStackProfileConfig, len(config.Profiles))
+	for _, profile := range config.Profiles {
+		configMap[profile.Name] = profile
 	}
 
 	return &Cmk{
 		writer:     writer,
 		executable: executable,
 		configMap:  configMap,
-	}
+	}, nil
 }
 
 func (c *Cmk) GetManagementApiEndpoint(profile string) (string, error) {
@@ -359,17 +395,6 @@ func (c *Cmk) GetManagementApiEndpoint(profile string) (string, error) {
 	return "", fmt.Errorf("profile %s does not exist", profile)
 }
 
-// ValidateCloudStackConnection Calls `cmk sync` to ensure that the endpoint and credentials + domain are valid
-func (c *Cmk) ValidateCloudStackConnection(ctx context.Context, profile string) error {
-	command := newCmkCommand("sync")
-	buffer, err := c.exec(ctx, profile, command...)
-	if err != nil {
-		return fmt.Errorf("validating cloudstack connection for cmk: %s: %v", buffer.String(), err)
-	}
-	logger.MarkPass("Connected to CloudStack server")
-	return nil
-}
-
 func (c *Cmk) CleanupVms(ctx context.Context, profile string, clusterName string, dryRun bool) error {
 	command := newCmkCommand("list virtualmachines")
 	applyCmkArgs(&command, withCloudStackKeyword(clusterName), appendArgs("listall=true"))
@@ -378,7 +403,8 @@ func (c *Cmk) CleanupVms(ctx context.Context, profile string, clusterName string
 		return fmt.Errorf("listing virtual machines in cluster %s: %s: %v", clusterName, result.String(), err)
 	}
 	if result.Len() == 0 {
-		return fmt.Errorf("virtual machines for cluster %s not found", clusterName)
+		logger.Info("virtual machines not found", "cluster", clusterName)
+		return nil
 	}
 	response := struct {
 		CmkVirtualMachines []cmkResourceIdentifier `json:"virtualmachine"`

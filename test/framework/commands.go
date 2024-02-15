@@ -1,9 +1,13 @@
 package framework
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
-	"github.com/aws/eks-anywhere/pkg/semver"
 	releasev1alpha1 "github.com/aws/eks-anywhere/release/api/v1alpha1"
 )
 
@@ -20,14 +24,16 @@ func withKubeconfig(kubeconfigFile string) CommandOpt {
 	return appendOpt("--kubeconfig", kubeconfigFile)
 }
 
-func WithForce() CommandOpt {
-	return appendOpt("--force-cleanup")
+func WithControlPlaneWaitTimeout(timeout string) CommandOpt {
+	return appendOpt("--control-plane-wait-timeout", timeout)
 }
 
-func ExecuteWithEksaVersion(version *semver.Version) CommandOpt {
-	return executeWithBinaryCommandOpt(func() (string, error) {
-		return GetReleaseBinaryFromVersion(version)
-	})
+func WithExternalEtcdWaitTimeout(timeout string) CommandOpt {
+	return appendOpt("--external-etcd-wait-timeout", timeout)
+}
+
+func WithPerMachineWaitTimeout(timeout string) CommandOpt {
+	return appendOpt("--per-machine-wait-timeout", timeout)
 }
 
 func ExecuteWithEksaRelease(release *releasev1alpha1.EksARelease) CommandOpt {
@@ -36,22 +42,35 @@ func ExecuteWithEksaRelease(release *releasev1alpha1.EksARelease) CommandOpt {
 	})
 }
 
-func ExecuteWithLatestMinorReleaseFromVersion(version *semver.Version) CommandOpt {
+// PackagedBinary represents a binary that can be extracted
+// executed from local disk.
+type PackagedBinary interface {
+	// BinaryPath returns the local disk path to the binary.
+	BinaryPath() (string, error)
+}
+
+// ExecuteWithBinary executes the command with a binary from an specific path.
+func ExecuteWithBinary(eksa PackagedBinary) CommandOpt {
 	return executeWithBinaryCommandOpt(func() (string, error) {
-		return GetLatestMinorReleaseBinaryFromVersion(version)
+		return eksa.BinaryPath()
 	})
 }
 
-func ExecuteWithLatestMinorReleaseFromMain() CommandOpt {
-	return executeWithBinaryCommandOpt(func() (string, error) {
-		return GetLatestMinorReleaseBinaryFromMain()
-	})
+// WithSudo add prefix "sudo" to the command. And preserve PATH.
+func WithSudo(user string) CommandOpt {
+	return func(binaryPath *string, args *[]string) (err error) {
+		*args = append([]string{*binaryPath}, *args...)
+		*binaryPath = "sudo"
+		if user != "" {
+			*args = append([]string{"-E", "PATH=$PATH", "-u", user}, *args...)
+		}
+		return nil
+	}
 }
 
-func ExecuteWithLatestReleaseFromTestBranch() CommandOpt {
-	return executeWithBinaryCommandOpt(func() (string, error) {
-		return GetLatestMinorReleaseBinaryFromTestBranch()
-	})
+// WithBundlesOverride modify bundles-override.
+func WithBundlesOverride(bundles string) CommandOpt {
+	return appendOpt("--bundles-override", bundles)
 }
 
 type binaryFetcher func() (binaryPath string, err error)
@@ -89,4 +108,44 @@ func removeFlag(flag string, args *[]string) {
 			break
 		}
 	}
+}
+
+// DefaultLocalEKSABinaryPath returns the full path for the local eks-a binary being tested.
+func DefaultLocalEKSABinaryPath() (string, error) {
+	binDir, err := DefaultLocalEKSABinDir()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(binDir, "eksctl-anywhere"), nil
+}
+
+// DefaultLocalEKSABinDir returns the full path for the local directory where
+// the tested eks-a binary lives.
+func DefaultLocalEKSABinDir() (string, error) {
+	workDir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(workDir, "bin"), nil
+}
+
+func prepareCommand(name string, args ...string) (*exec.Cmd, error) {
+	command := strings.Join(append([]string{name}, args...), " ")
+	shArgs := []string{"-c", command}
+
+	cmd := exec.CommandContext(context.Background(), "sh", shArgs...)
+
+	envPath := os.Getenv("PATH")
+
+	binDir, err := DefaultLocalEKSABinDir()
+	if err != nil {
+		return nil, err
+	}
+
+	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, fmt.Sprintf("PATH=%s:%s", binDir, envPath))
+
+	return cmd, nil
 }

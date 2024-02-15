@@ -15,28 +15,22 @@ import (
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/cluster"
 	"github.com/aws/eks-anywhere/pkg/logger"
+	"github.com/aws/eks-anywhere/pkg/types"
 	releasev1 "github.com/aws/eks-anywhere/release/api/v1alpha1"
 )
 
 const (
-	license = `The EKS Anywhere package controller and the EKS Anywhere Curated Packages
-(referred to as “features”) are provided as “preview features” subject to the AWS Service Terms,
-(including Section 2 (Betas and Previews)) of the same. During the EKS Anywhere Curated Packages Public Preview,
-the AWS Service Terms are extended to provide customers access to these features free of charge.
-These features will be subject to a service charge and fee structure at ”General Availability“ of the features.`
-	width = 112
+	license = `The Amazon EKS Anywhere Curated Packages are only available to customers with the 
+Amazon EKS Anywhere Enterprise Subscription`
+	width = 86
 )
 
-func CreateBundleManager(kubeVersion string) bundle.Manager {
-	major, minor, err := parseKubeVersion(kubeVersion)
-	if err != nil {
-		return nil
-	}
-	log := logr.Discard()
-	k := NewKubeVersion(major, minor)
-	discovery := NewDiscovery(k)
-	puller := artifacts.NewRegistryPuller()
-	return bundle.NewBundleManager(log, discovery, puller, nil)
+var userMsgSeparator = strings.Repeat("-", width)
+
+// CreateBundleManager builds a new bundle Manager.
+func CreateBundleManager(log logr.Logger) bundle.RegistryClient {
+	puller := artifacts.NewRegistryPuller(log)
+	return bundle.NewRegistryClient(puller)
 }
 
 func parseKubeVersion(kubeVersion string) (string, string, error) {
@@ -53,7 +47,7 @@ func GetVersionBundle(reader Reader, eksaVersion string, spec *v1alpha1.Cluster)
 	if err != nil {
 		return nil, err
 	}
-	versionsBundle, err := cluster.GetVersionsBundle(spec, b)
+	versionsBundle, err := cluster.GetVersionsBundle(spec.Spec.KubernetesVersion, b)
 	if err != nil {
 		return nil, err
 	}
@@ -63,22 +57,20 @@ func GetVersionBundle(reader Reader, eksaVersion string, spec *v1alpha1.Cluster)
 func PrintLicense() {
 	// Currently, use the width of the longest line to repeat the dashes
 	// Sample Output
-	//----------------------------------------------------------------------------------------------------------------
-	//The EKS Anywhere package controller and the EKS Anywhere Curated Packages
-	//(referred to as “features”) are provided as “preview features” subject to the AWS Service Terms,
-	//(including Section 2 (Betas and Previews)) of the same. During the EKS Anywhere Curated Packages Public Preview,
-	//the AWS Service Terms are extended to provide customers access to these features free of charge.
-	//These features will be subject to a service charge and fee structure at ”General Availability“ of the features.
-	//----------------------------------------------------------------------------------------------------------------
-	fmt.Println(strings.Repeat("-", width))
+	//-------------------------------------------------------------------------------------
+	//The Amazon EKS Anywhere Curated Packages are only available to customers with the
+	//Amazon EKS Anywhere Enterprise Subscription
+	//-------------------------------------------------------------------------------------
+	fmt.Println(userMsgSeparator)
 	fmt.Println(license)
-	fmt.Println(strings.Repeat("-", width))
+	fmt.Println(userMsgSeparator)
 }
 
-func Pull(ctx context.Context, art string) ([]byte, error) {
-	puller := artifacts.NewRegistryPuller()
+// PullLatestBundle reads the contents of the artifact using the latest bundle.
+func PullLatestBundle(ctx context.Context, log logr.Logger, artifact string) ([]byte, error) {
+	puller := artifacts.NewRegistryPuller(log)
 
-	data, err := puller.Pull(ctx, art)
+	data, err := puller.Pull(ctx, artifact, "")
 	if err != nil {
 		return nil, fmt.Errorf("unable to pull artifacts %v", err)
 	}
@@ -89,8 +81,8 @@ func Pull(ctx context.Context, art string) ([]byte, error) {
 	return data, nil
 }
 
-func Push(ctx context.Context, ref, fileName string, fileContent []byte) error {
-	registry, err := content.NewRegistry(content.RegistryOptions{})
+func PushBundle(ctx context.Context, ref, fileName string, fileContent []byte) error {
+	registry, err := content.NewRegistry(content.RegistryOptions{Insecure: ctx.Value(types.InsecureRegistry).(bool)})
 	if err != nil {
 		return fmt.Errorf("creating registry: %w", err)
 	}

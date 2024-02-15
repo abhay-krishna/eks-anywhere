@@ -2,77 +2,82 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
+	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 
+	"github.com/aws/eks-anywhere/cmd/eksctl-anywhere/cmd/aflag"
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/dependencies"
 	"github.com/aws/eks-anywhere/pkg/kubeconfig"
+	"github.com/aws/eks-anywhere/pkg/logger"
+	"github.com/aws/eks-anywhere/pkg/providers/tinkerbell/hardware"
 	"github.com/aws/eks-anywhere/pkg/types"
 	"github.com/aws/eks-anywhere/pkg/validations"
 	"github.com/aws/eks-anywhere/pkg/validations/upgradevalidations"
-	"github.com/aws/eks-anywhere/pkg/workflows"
+	"github.com/aws/eks-anywhere/pkg/workflows/management"
+	"github.com/aws/eks-anywhere/pkg/workflows/workload"
 )
 
 type upgradeClusterOptions struct {
 	clusterOptions
+	timeoutOptions
 	wConfig               string
 	forceClean            bool
 	hardwareCSVPath       string
 	tinkerbellBootstrapIP string
+	skipValidations       []string
+	providerOptions       *dependencies.ProviderOptions
 }
 
-var uc = &upgradeClusterOptions{}
+var uc = &upgradeClusterOptions{
+	providerOptions: &dependencies.ProviderOptions{
+		Tinkerbell: &dependencies.TinkerbellOptions{
+			BMCOptions: &hardware.BMCOptions{
+				RPC: &hardware.RPCOpts{},
+			},
+		},
+	},
+}
 
 var upgradeClusterCmd = &cobra.Command{
 	Use:          "cluster",
 	Short:        "Upgrade workload cluster",
 	Long:         "This command is used to upgrade workload clusters",
-	PreRunE:      preRunUpgradeCluster,
+	PreRunE:      bindFlagsToViper,
 	SilenceUsage: true,
+	Args:         cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := uc.upgradeCluster(cmd); err != nil {
+		if uc.forceClean {
+			logger.MarkFail(forceCleanupDeprecationMessageForUpgrade)
+			return errors.New("please remove the --force-cleanup flag")
+		}
+
+		if err := uc.upgradeCluster(cmd, args); err != nil {
 			return fmt.Errorf("failed to upgrade cluster: %v", err)
 		}
 		return nil
 	},
 }
 
-func preRunUpgradeCluster(cmd *cobra.Command, args []string) error {
-	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
-		err := viper.BindPFlag(flag.Name, flag)
-		if err != nil {
-			log.Fatalf("Error initializing flags: %v", err)
-		}
-	})
-	return nil
-}
-
 func init() {
 	upgradeCmd.AddCommand(upgradeClusterCmd)
-	upgradeClusterCmd.Flags().StringVarP(&uc.fileName, "filename", "f", "", "Filename that contains EKS-A cluster configuration")
+	applyClusterOptionFlags(upgradeClusterCmd.Flags(), &uc.clusterOptions)
+	applyTimeoutFlags(upgradeClusterCmd.Flags(), &uc.timeoutOptions)
+	applyTinkerbellHardwareFlag(upgradeClusterCmd.Flags(), &uc.hardwareCSVPath)
 	upgradeClusterCmd.Flags().StringVarP(&uc.wConfig, "w-config", "w", "", "Kubeconfig file to use when upgrading a workload cluster")
 	upgradeClusterCmd.Flags().BoolVar(&uc.forceClean, "force-cleanup", false, "Force deletion of previously created bootstrap cluster")
-	upgradeClusterCmd.Flags().StringVar(&uc.bundlesOverride, "bundles-override", "", "Override default Bundles manifest (not recommended)")
-	upgradeClusterCmd.Flags().StringVar(&uc.managementKubeconfig, "kubeconfig", "", "Management cluster kubeconfig file")
-	upgradeClusterCmd.Flags().StringVarP(
-		&cc.hardwareCSVPath,
-		TinkerbellHardwareCSVFlagName,
-		TinkerbellHardwareCSVFlagAlias,
-		"",
-		TinkerbellHardwareCSVFlagDescription,
-	)
+	hideForceCleanup(upgradeClusterCmd.Flags())
+	upgradeClusterCmd.Flags().StringArrayVar(&uc.skipValidations, "skip-validations", []string{}, fmt.Sprintf("Bypass upgrade validations by name. Valid arguments you can pass are --skip-validations=%s", strings.Join(upgradevalidations.SkippableValidations[:], ",")))
 
-	if err := upgradeClusterCmd.MarkFlagRequired("filename"); err != nil {
-		log.Fatalf("Error marking flag as required: %v", err)
-	}
+	aflag.MarkRequired(createClusterCmd.Flags(), aflag.ClusterConfig.Name)
+	tinkerbellFlags(upgradeClusterCmd.Flags(), uc.providerOptions.Tinkerbell.BMCOptions.RPC)
 }
 
-func (uc *upgradeClusterOptions) upgradeCluster(cmd *cobra.Command) error {
+// nolint:gocyclo
+func (uc *upgradeClusterOptions) upgradeCluster(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
 	clusterConfigFileExist := validations.FileExists(uc.fileName)
@@ -86,64 +91,88 @@ func (uc *upgradeClusterOptions) upgradeCluster(cmd *cobra.Command) error {
 	}
 
 	if clusterConfig.Spec.DatacenterRef.Kind == v1alpha1.TinkerbellDatacenterKind {
-		flag := cmd.Flags().Lookup(TinkerbellHardwareCSVFlagName)
-
-		// If no flag was returned there is a developer error as the flag has been removed
-		// from the program rendering it invalid.
-		if flag == nil {
-			panic("'hardwarefile' flag not configured")
+		if err := checkTinkerbellFlags(cmd.Flags(), uc.hardwareCSVPath, Upgrade); err != nil {
+			return err
 		}
+	}
 
-		if len(uc.hardwareCSVPath) != 0 && !validations.FileExists(uc.hardwareCSVPath) {
-			return fmt.Errorf("hardware config file %s does not exist", uc.hardwareCSVPath)
-		}
+	if clusterConfig.Spec.EtcdEncryption != nil && clusterConfig.Spec.DatacenterRef.Kind != v1alpha1.CloudStackDatacenterKind && clusterConfig.Spec.DatacenterRef.Kind != v1alpha1.VSphereDatacenterKind {
+		return fmt.Errorf("etcdEncryption is currently not supported for the current provider: %s", clusterConfig.Spec.DatacenterRef.Kind)
+	}
+
+	if err := v1alpha1.ValidateEtcdEncryptionConfig(clusterConfig.Spec.EtcdEncryption); err != nil {
+		return err
 	}
 
 	if _, err := uc.commonValidations(ctx); err != nil {
 		return fmt.Errorf("common validations failed due to: %v", err)
+	}
+
+	if err := validations.ValidateClusterNameFromCommandAndConfig(args, clusterConfig.Name); err != nil {
+		return err
 	}
 	clusterSpec, err := newClusterSpec(uc.clusterOptions)
 	if err != nil {
 		return err
 	}
 
+	if err := validations.ValidateAuthenticationForRegistryMirror(clusterSpec); err != nil {
+		return err
+	}
+
 	cliConfig := buildCliConfig(clusterSpec)
-	dirs, err := cc.directoriesToMount(clusterSpec, cliConfig)
+	dirs, err := uc.directoriesToMount(clusterSpec, cliConfig)
 	if err != nil {
 		return err
 	}
 
-	deps, err := dependencies.ForSpec(ctx, clusterSpec).WithExecutableMountDirs(dirs...).
+	upgradeCLIConfig, err := buildUpgradeCliConfig(uc)
+	if err != nil {
+		return err
+	}
+
+	clusterManagerTimeoutOpts, err := buildClusterManagerOpts(uc.timeoutOptions, clusterSpec.Cluster.Spec.DatacenterRef.Kind)
+	if err != nil {
+		return fmt.Errorf("failed to build cluster manager opts: %v", err)
+	}
+
+	var skippedValidations map[string]bool
+	if len(uc.skipValidations) != 0 {
+		skippedValidations, err = validations.ValidateSkippableValidation(uc.skipValidations, upgradevalidations.SkippableValidations)
+		if err != nil {
+			return err
+		}
+	}
+
+	factory := dependencies.ForSpec(clusterSpec).WithExecutableMountDirs(dirs...).
 		WithBootstrapper().
 		WithCliConfig(cliConfig).
-		WithClusterManager(clusterSpec.Cluster).
-		WithProvider(uc.fileName, clusterSpec.Cluster, cc.skipIpCheck, uc.hardwareCSVPath, uc.forceClean, uc.tinkerbellBootstrapIP).
-		WithFluxAddonClient(clusterSpec.Cluster, clusterSpec.FluxConfig, cliConfig).
+		WithClusterManager(clusterSpec.Cluster, clusterManagerTimeoutOpts).
+		WithClusterApplier().
+		WithProvider(uc.fileName, clusterSpec.Cluster, cc.skipIpCheck, uc.hardwareCSVPath, uc.forceClean, uc.tinkerbellBootstrapIP, skippedValidations, uc.providerOptions).
+		WithGitOpsFlux(clusterSpec.Cluster, clusterSpec.FluxConfig, cliConfig).
 		WithWriter().
 		WithCAPIManager().
 		WithEksdUpgrader().
 		WithEksdInstaller().
 		WithKubectl().
-		Build(ctx)
+		WithValidatorClients().
+		WithUpgradeClusterDefaulter(upgradeCLIConfig)
+
+	if uc.timeoutOptions.noTimeouts {
+		factory.WithNoTimeouts()
+	}
+
+	deps, err := factory.Build(ctx)
 	if err != nil {
 		return err
 	}
 	defer close(ctx, deps)
 
-	if deps.Provider.Name() == "tinkerbell" {
-		return fmt.Errorf("Error: upgrade operation is not supported for provider tinkerbell")
+	clusterSpec, err = deps.UpgradeClusterDefaulter.Run(ctx, clusterSpec)
+	if err != nil {
+		return err
 	}
-
-	upgradeCluster := workflows.NewUpgrade(
-		deps.Bootstrapper,
-		deps.Provider,
-		deps.CAPIManager,
-		deps.ClusterManager,
-		deps.FluxAddonClient,
-		deps.Writer,
-		deps.EksdUpgrader,
-		deps.EksdInstaller,
-	)
 
 	workloadCluster := &types.Cluster{
 		Name:           clusterSpec.Cluster.Name,
@@ -158,15 +187,46 @@ func (uc *upgradeClusterOptions) upgradeCluster(cmd *cobra.Command) error {
 	}
 
 	validationOpts := &validations.Opts{
-		Kubectl:           deps.Kubectl,
-		Spec:              clusterSpec,
-		WorkloadCluster:   workloadCluster,
-		ManagementCluster: managementCluster,
-		Provider:          deps.Provider,
+		Kubectl:            deps.UnAuthKubectlClient,
+		Spec:               clusterSpec,
+		WorkloadCluster:    workloadCluster,
+		ManagementCluster:  managementCluster,
+		Provider:           deps.Provider,
+		CliConfig:          cliConfig,
+		SkippedValidations: skippedValidations,
+		KubeClient:         deps.UnAuthKubeClient.KubeconfigClient(managementCluster.KubeconfigFile),
 	}
+
 	upgradeValidations := upgradevalidations.New(validationOpts)
 
-	err = upgradeCluster.Run(ctx, clusterSpec, managementCluster, workloadCluster, upgradeValidations, uc.forceClean)
+	if clusterConfig.IsSelfManaged() {
+		upgrade := management.NewUpgrade(
+			deps.UnAuthKubeClient,
+			deps.Provider,
+			deps.CAPIManager,
+			deps.ClusterManager,
+			deps.GitOpsFlux,
+			deps.Writer,
+			deps.EksdUpgrader,
+			deps.EksdInstaller,
+			deps.ClusterApplier,
+		)
+
+		err = upgrade.Run(ctx, clusterSpec, managementCluster, upgradeValidations)
+
+	} else {
+		upgradeWorkloadCluster := workload.NewUpgrade(
+			deps.Provider,
+			deps.ClusterManager,
+			deps.GitOpsFlux,
+			deps.Writer,
+			deps.ClusterApplier,
+			deps.EksdInstaller,
+			deps.PackageInstaller,
+		)
+		err = upgradeWorkloadCluster.Run(ctx, workloadCluster, clusterSpec, upgradeValidations)
+	}
+
 	cleanup(deps, &err)
 	return err
 }
@@ -177,9 +237,14 @@ func (uc *upgradeClusterOptions) commonValidations(ctx context.Context) (cluster
 		return nil, err
 	}
 
+	if uc.wConfig == "" && uc.managementKubeconfig != "" && clusterConfig.IsSelfManaged() {
+		uc.wConfig = uc.managementKubeconfig
+		uc.managementKubeconfig = ""
+	}
+
 	kubeconfigPath := getKubeconfigPath(clusterConfig.Name, uc.wConfig)
-	if !validations.FileExistsAndIsNotEmpty(kubeconfigPath) {
-		return nil, kubeconfig.NewMissingFileError(kubeconfigPath)
+	if err := kubeconfig.ValidateFilename(kubeconfigPath); err != nil {
+		return nil, err
 	}
 
 	return clusterConfig, nil

@@ -19,7 +19,7 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Cluster is the Schema for the clusters API
+        description: Cluster is the Schema for the clusters API.
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -34,11 +34,12 @@ spec:
           metadata:
             type: object
           spec:
-            description: ClusterSpec defines the desired state of Cluster
+            description: ClusterSpec defines the desired state of Cluster.
             properties:
               bundlesRef:
-                description: BundlesRef contains a reference to the Bundles containing
-                  the desired dependencies for the cluster
+                description: 'BundlesRef contains a reference to the Bundles containing
+                  the desired dependencies for the cluster. DEPRECATED: Use EksaVersion
+                  instead.'
                 properties:
                   apiVersion:
                     description: APIVersion refers to the Bundles APIVersion
@@ -65,14 +66,51 @@ spec:
                       in the cluster
                     properties:
                       cilium:
+                        description: CiliumConfig contains configuration specific
+                          to the Cilium CNI.
                         properties:
+                          egressMasqueradeInterfaces:
+                            description: EgressMasquaradeInterfaces determines which
+                              network interfaces are used for masquerading. Accepted
+                              values are a valid interface name or interface prefix.
+                            type: string
+                          ipv4NativeRoutingCIDR:
+                            description: IPv4NativeRoutingCIDR specifies the CIDR
+                              to use when RoutingMode is set to direct. When specified,
+                              Cilium assumes networking for this CIDR is preconfigured
+                              and hands traffic destined for that range to the Linux
+                              network stack without applying any SNAT. If this is
+                              not set autoDirectNodeRoutes will be set to true
+                            type: string
+                          ipv6NativeRoutingCIDR:
+                            description: IPv6NativeRoutingCIDR specifies the IPv6
+                              CIDR to use when RoutingMode is set to direct. When
+                              specified, Cilium assumes networking for this CIDR is
+                              preconfigured and hands traffic destined for that range
+                              to the Linux network stack without applying any SNAT.
+                              If this is not set autoDirectNodeRoutes will be set
+                              to true
+                            type: string
                           policyEnforcementMode:
                             description: PolicyEnforcementMode determines communication
                               allowed between pods. Accepted values are default, always,
                               never.
                             type: string
+                          routingMode:
+                            description: RoutingMode indicates the routing tunnel
+                              mode to use for Cilium. Accepted values are overlay
+                              (geneve tunnel with overlay) or direct (tunneling disabled
+                              with direct routing) Defaults to overlay.
+                            type: string
+                          skipUpgrade:
+                            description: SkipUpgrade indicicates that Cilium maintenance
+                              should be skipped during upgrades. This can be used
+                              when operators wish to self manage the Cilium installation.
+                            type: boolean
                         type: object
                       kindnetd:
+                        description: KindnetdConfig contains configuration specific
+                          to the Kindnetd CNI.
                         type: object
                     type: object
                   dns:
@@ -113,6 +151,12 @@ spec:
                 type: object
               controlPlaneConfiguration:
                 properties:
+                  certSans:
+                    description: CertSANs is a slice of domain names or IPs to be
+                      added as Subject Name Alternatives of the Kube API Servers Certificate.
+                    items:
+                      type: string
+                    type: array
                   count:
                     description: Count defines the number of desired control plane
                       nodes. Defaults to 1.
@@ -142,6 +186,11 @@ spec:
                       name:
                         type: string
                     type: object
+                  skipLoadBalancerDeployment:
+                    description: SkipLoadBalancerDeployment skip deploying control
+                      plane load balancer. Make sure your infrastructure can handle
+                      control plane load balancing when you set this field to true.
+                    type: boolean
                   taints:
                     description: Taints define the set of taints to be applied on
                       control plane nodes
@@ -172,6 +221,24 @@ spec:
                       - key
                       type: object
                     type: array
+                  upgradeRolloutStrategy:
+                    description: UpgradeRolloutStrategy determines the rollout strategy
+                      to use for rolling upgrades and related parameters/knobs
+                    properties:
+                      rollingUpdate:
+                        description: ControlPlaneRollingUpdateParams is API for rolling
+                          update strategy knobs.
+                        properties:
+                          maxSurge:
+                            type: integer
+                        required:
+                        - maxSurge
+                        type: object
+                      type:
+                        description: UpgradeRolloutStrategyType defines the types
+                          of upgrade rollout strategies.
+                        type: string
+                    type: object
                 type: object
               datacenterRef:
                 properties:
@@ -180,9 +247,65 @@ spec:
                   name:
                     type: string
                 type: object
+              eksaVersion:
+                description: EksaVersion is the semver identifying the release of
+                  eks-a used to populate the cluster components.
+                type: string
+              etcdEncryption:
+                items:
+                  description: EtcdEncryption defines the configuration for ETCD encryption.
+                  properties:
+                    providers:
+                      items:
+                        description: EtcdEncryptionProvider defines the configuration
+                          for ETCD encryption providers. Currently only KMS provider
+                          is supported.
+                        properties:
+                          kms:
+                            description: KMS defines the configuration for KMS Encryption
+                              provider.
+                            properties:
+                              cachesize:
+                                description: CacheSize defines the maximum number
+                                  of encrypted objects to be cached in memory. The
+                                  default value is 1000. You can set this to a negative
+                                  value to disable caching.
+                                format: int32
+                                type: integer
+                              name:
+                                description: Name defines the name of KMS plugin to
+                                  be used.
+                                type: string
+                              socketListenAddress:
+                                description: SocketListenAddress defines a UNIX socket
+                                  address that the KMS provider listens on.
+                                type: string
+                              timeout:
+                                description: Timeout for kube-apiserver to wait for
+                                  KMS plugin. Default is 3s.
+                                type: string
+                            required:
+                            - name
+                            - socketListenAddress
+                            type: object
+                        required:
+                        - kms
+                        type: object
+                      type: array
+                    resources:
+                      description: Resources defines a list of objects and custom
+                        resources definitions that should be encrypted.
+                      items:
+                        type: string
+                      type: array
+                  required:
+                  - providers
+                  - resources
+                  type: object
+                type: array
               externalEtcdConfiguration:
                 description: ExternalEtcdConfiguration defines the configuration options
-                  for using unstacked etcd topology
+                  for using unstacked etcd topology.
                 properties:
                   count:
                     type: integer
@@ -214,10 +337,102 @@ spec:
                 type: array
               kubernetesVersion:
                 type: string
+              machineHealthCheck:
+                description: MachineHealthCheck allows to configure timeouts for machine
+                  health checks. Machine Health Checks are responsible for remediating
+                  unhealthy Machines. Configuring these values will decide how long
+                  to wait to remediate unhealthy machine or determine health of nodes'
+                  machines.
+                properties:
+                  nodeStartupTimeout:
+                    description: NodeStartupTimeout is used to configure the node
+                      startup timeout in machine health checks. It determines how
+                      long a MachineHealthCheck should wait for a Node to join the
+                      cluster, before considering a Machine unhealthy. If not configured,
+                      the default value is set to "10m0s" (10 minutes) for all providers.
+                      For Tinkerbell provider the default is "20m0s".
+                    type: string
+                  unhealthyMachineTimeout:
+                    description: UnhealthyMachineTimeout is used to configure the
+                      unhealthy machine timeout in machine health checks. If any unhealthy
+                      conditions are met for the amount of time specified as the timeout,
+                      the machines are considered unhealthy. If not configured, the
+                      default value is set to "5m0s" (5 minutes).
+                    type: string
+                type: object
               managementCluster:
                 properties:
                   name:
                     type: string
+                type: object
+              packages:
+                description: PackageConfiguration for installing EKS Anywhere curated
+                  packages.
+                properties:
+                  controller:
+                    description: Controller package controller configuration
+                    properties:
+                      digest:
+                        description: Digest package controller digest
+                        type: string
+                      disableWebhooks:
+                        description: DisableWebhooks on package controller
+                        type: boolean
+                      env:
+                        description: Env of package controller in the format `key=value`
+                        items:
+                          type: string
+                        type: array
+                      repository:
+                        description: Repository package controller repository
+                        type: string
+                      resources:
+                        description: Resources of package controller
+                        properties:
+                          limits:
+                            description: ImageResource resources for container image.
+                            properties:
+                              cpu:
+                                description: CPU image cpu
+                                type: string
+                              memory:
+                                description: Memory image memory
+                                type: string
+                            type: object
+                          requests:
+                            description: Requests for image resources
+                            properties:
+                              cpu:
+                                description: CPU image cpu
+                                type: string
+                              memory:
+                                description: Memory image memory
+                                type: string
+                            type: object
+                        type: object
+                      tag:
+                        description: Tag package controller tag
+                        type: string
+                    type: object
+                  cronjob:
+                    description: Cronjob for ecr token refresher
+                    properties:
+                      digest:
+                        description: Digest ecr token refresher digest
+                        type: string
+                      disable:
+                        description: Disable on cron job
+                        type: boolean
+                      repository:
+                        description: Repository ecr token refresher repository
+                        type: string
+                      tag:
+                        description: Tag ecr token refresher tag
+                        type: string
+                    type: object
+                  disable:
+                    description: Disable package controller on cluster
+                    type: boolean
                 type: object
               podIamConfig:
                 properties:
@@ -239,8 +454,11 @@ spec:
                 type: object
               registryMirrorConfiguration:
                 description: RegistryMirrorConfiguration defines the settings for
-                  image registry mirror
+                  image registry mirror.
                 properties:
+                  authenticate:
+                    description: Authenticate defines if registry requires authentication
+                    type: boolean
                   caCertContent:
                     description: CACertContent defines the contents registry mirror
                       CA certificate
@@ -252,9 +470,28 @@ spec:
                   insecureSkipVerify:
                     description: InsecureSkipVerify skips the registry certificate
                       verification. Only use this solution for isolated testing or
-                      in a tightly controlled, air-gapped environment. Currently only
-                      supported for snow provider
+                      in a tightly controlled, air-gapped environment.
                     type: boolean
+                  ociNamespaces:
+                    description: OCINamespaces defines the mapping from an upstream
+                      registry to a local namespace where upstream artifacts are placed
+                      into
+                    items:
+                      description: OCINamespace represents an entity in a local reigstry
+                        to group related images.
+                      properties:
+                        namespace:
+                          description: Namespace refers to the name of a namespace
+                            in the local registry
+                          type: string
+                        registry:
+                          description: Name refers to the name of the upstream registry
+                          type: string
+                      required:
+                      - namespace
+                      - registry
+                      type: object
+                    type: array
                   port:
                     description: Port defines the port exposed for registry mirror
                       endpoint
@@ -263,10 +500,28 @@ spec:
               workerNodeGroupConfigurations:
                 items:
                   properties:
+                    autoscalingConfiguration:
+                      description: AutoScalingConfiguration defines the auto scaling
+                        configuration
+                      properties:
+                        maxCount:
+                          description: MaxCount defines the maximum number of nodes
+                            for the associated resource group.
+                          type: integer
+                        minCount:
+                          description: MinCount defines the minimum number of nodes
+                            for the associated resource group.
+                          type: integer
+                      type: object
                     count:
                       description: Count defines the number of desired worker nodes.
                         Defaults to 1.
                       type: integer
+                    kubernetesVersion:
+                      description: KuberenetesVersion defines the version for worker
+                        nodes. If not set, the top level spec kubernetesVersion will
+                        be used.
+                      type: string
                     labels:
                       additionalProperties:
                         type: string
@@ -314,12 +569,42 @@ spec:
                         - key
                         type: object
                       type: array
+                    upgradeRolloutStrategy:
+                      description: UpgradeRolloutStrategy determines the rollout strategy
+                        to use for rolling upgrades and related parameters/knobs
+                      properties:
+                        rollingUpdate:
+                          description: WorkerNodesRollingUpdateParams is API for rolling
+                            update strategy knobs.
+                          properties:
+                            maxSurge:
+                              type: integer
+                            maxUnavailable:
+                              type: integer
+                          required:
+                          - maxSurge
+                          - maxUnavailable
+                          type: object
+                        type:
+                          description: UpgradeRolloutStrategyType defines the types
+                            of upgrade rollout strategies.
+                          type: string
+                      type: object
                   type: object
                 type: array
             type: object
           status:
-            description: ClusterStatus defines the observed state of Cluster
+            description: ClusterStatus defines the observed state of Cluster.
             properties:
+              childrenReconciledGeneration:
+                description: 'ChildrenReconciledGeneration represents the sum of the
+                  .metadata.generation for all the linked objects for the cluster,
+                  observed the last time the cluster was successfully reconciled.
+                  NOTE: This field was added for internal use and we do not provide
+                  guarantees to its behavior if changed externally. Its meaning and
+                  implementation are subject to change in the future.'
+                format: int64
+                type: integer
               conditions:
                 items:
                   description: Condition defines an observation of a Cluster API resource
@@ -392,6 +677,24 @@ spec:
                 description: Descriptive message about a fatal problem while reconciling
                   a cluster
                 type: string
+              failureReason:
+                description: Machine readable value about a terminal problem while
+                  reconciling the cluster set at the same time as failureMessage
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the latest generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              reconciledGeneration:
+                description: 'ReconciledGeneration represents the .metadata.generation
+                  the last time the cluster was successfully reconciled. It is the
+                  latest generation observed by the controller. NOTE: This field was
+                  added for internal use and we do not provide guarantees to its behavior
+                  if changed externally. Its meaning and implementation are subject
+                  to change in the future.'
+                format: int64
+                type: integer
             type: object
         type: object
     served: true

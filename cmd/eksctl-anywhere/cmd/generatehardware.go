@@ -3,35 +3,43 @@ package cmd
 import (
 	"bufio"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
+	"github.com/aws/eks-anywhere/pkg/dependencies"
 	"github.com/aws/eks-anywhere/pkg/providers/tinkerbell/hardware"
 )
 
 type hardwareOptions struct {
-	csvPath    string
-	outputPath string
+	csvPath         string
+	outputPath      string
+	providerOptions *dependencies.ProviderOptions
 }
 
-var hOpts = &hardwareOptions{}
+var hOpts = &hardwareOptions{
+	providerOptions: &dependencies.ProviderOptions{
+		Tinkerbell: &dependencies.TinkerbellOptions{
+			BMCOptions: &hardware.BMCOptions{
+				RPC: &hardware.RPCOpts{},
+			},
+		},
+	},
+}
 
 var generateHardwareCmd = &cobra.Command{
-	Use:   "hardware",
-	Short: "Generate hardware files",
-	Long: `
-Generate Kubernetes hardware YAML manifests for each Hardware entry in the source.
-`,
-	RunE: hOpts.generateHardware,
+	Use:     "hardware",
+	Short:   "Generate hardware files",
+	Long:    `Generate Kubernetes hardware YAML manifests for each Hardware entry in the source.`,
+	RunE:    hOpts.generateHardware,
+	PreRunE: bindFlagsToViper,
 }
 
 func init() {
 	generateCmd.AddCommand(generateHardwareCmd)
 
-	flags := generateHardwareCmd.Flags()
-	flags.StringVarP(&hOpts.outputPath, "output", "o", "", "Path to output hardware YAML.")
-	flags.StringVarP(
+	fset := generateHardwareCmd.Flags()
+	fset.StringVarP(&hOpts.outputPath, "output", "o", "", "Path to output hardware YAML.")
+	fset.StringVarP(
 		&hOpts.csvPath,
 		TinkerbellHardwareCSVFlagName,
 		TinkerbellHardwareCSVFlagAlias,
@@ -42,17 +50,13 @@ func init() {
 	if err := generateHardwareCmd.MarkFlagRequired(TinkerbellHardwareCSVFlagName); err != nil {
 		panic(err)
 	}
+	tinkerbellFlags(fset, hOpts.providerOptions.Tinkerbell.BMCOptions.RPC)
 }
 
 func (hOpts *hardwareOptions) generateHardware(cmd *cobra.Command, args []string) error {
-	csvFile, err := os.Open(hOpts.csvPath)
+	hardwareYaml, err := hardware.BuildHardwareYAML(hOpts.csvPath, hOpts.providerOptions.Tinkerbell.BMCOptions)
 	if err != nil {
-		return fmt.Errorf("csv: %v", err)
-	}
-
-	reader, err := hardware.NewCSVReader(csvFile)
-	if err != nil {
-		return fmt.Errorf("csv: %v", err)
+		return fmt.Errorf("building hardware yaml from csv: %v", err)
 	}
 
 	fh, err := hardware.CreateOrStdout(hOpts.outputPath)
@@ -61,9 +65,10 @@ func (hOpts *hardwareOptions) generateHardware(cmd *cobra.Command, args []string
 	}
 	bufferedWriter := bufio.NewWriter(fh)
 	defer bufferedWriter.Flush()
-	writer := hardware.NewTinkerbellManifestYAML(bufferedWriter)
+	_, err = bufferedWriter.Write(hardwareYaml)
+	if err != nil {
+		return fmt.Errorf("writing hardware yaml to output: %v", err)
+	}
 
-	validator := hardware.NewDefaultMachineValidator()
-
-	return hardware.TranslateAll(reader, writer, validator)
+	return nil
 }

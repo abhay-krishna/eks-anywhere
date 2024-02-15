@@ -8,6 +8,7 @@ import (
 	"github.com/aws/eks-anywhere/pkg/clusterapi"
 	"github.com/aws/eks-anywhere/pkg/crypto"
 	"github.com/aws/eks-anywhere/pkg/templater"
+	"github.com/aws/eks-anywhere/pkg/utils/ptr"
 )
 
 func TestOIDCToExtraArgs(t *testing.T) {
@@ -309,6 +310,50 @@ func TestSecureEtcdTlsCipherSuitesExtraArgs(t *testing.T) {
 	}
 }
 
+func TestCgroupDriverCgroupfsExtraArgs(t *testing.T) {
+	tests := []struct {
+		testName string
+		want     clusterapi.ExtraArgs
+	}{
+		{
+			testName: "default",
+			want: clusterapi.ExtraArgs{
+				"cgroup-driver": "cgroupfs",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.testName, func(t *testing.T) {
+			if got := clusterapi.CgroupDriverCgroupfsExtraArgs(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("CgroupDriverCgroupfsExtraArgs() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCgroupDriverSystemdExtraArgs(t *testing.T) {
+	tests := []struct {
+		testName string
+		want     clusterapi.ExtraArgs
+	}{
+		{
+			testName: "default",
+			want: clusterapi.ExtraArgs{
+				"cgroup-driver": "systemd",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.testName, func(t *testing.T) {
+			if got := clusterapi.CgroupDriverSystemdExtraArgs(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("CgroupDriverSystemdExtraArgs() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNodeLabelsExtraArgs(t *testing.T) {
 	tests := []struct {
 		testName string
@@ -318,14 +363,14 @@ func TestNodeLabelsExtraArgs(t *testing.T) {
 		{
 			testName: "no labels",
 			wnc: v1alpha1.WorkerNodeGroupConfiguration{
-				Count: 3,
+				Count: ptr.Int(3),
 			},
 			want: clusterapi.ExtraArgs{},
 		},
 		{
 			testName: "with labels",
 			wnc: v1alpha1.WorkerNodeGroupConfiguration{
-				Count:  3,
+				Count:  ptr.Int(3),
 				Labels: map[string]string{"label1": "foo", "label2": "bar"},
 			},
 			want: clusterapi.ExtraArgs{
@@ -469,6 +514,145 @@ func TestNodeCIDRMaskExtraArgs(t *testing.T) {
 		t.Run(tt.testName, func(t *testing.T) {
 			if got := clusterapi.NodeCIDRMaskExtraArgs(tt.clusterNetwork); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("NodeCIDRMaskExtraArgs() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEtcdEncryptionExtraArgs(t *testing.T) {
+	tests := []struct {
+		name           string
+		etcdEncryption *[]v1alpha1.EtcdEncryption
+		want           clusterapi.ExtraArgs
+	}{
+		{
+			name:           "nil config",
+			etcdEncryption: nil,
+			want:           clusterapi.ExtraArgs{},
+		},
+		{
+			name:           "empty config",
+			etcdEncryption: &[]v1alpha1.EtcdEncryption{},
+			want:           clusterapi.ExtraArgs{},
+		},
+		{
+			name: "one config",
+			etcdEncryption: &[]v1alpha1.EtcdEncryption{
+				{
+					Providers: []v1alpha1.EtcdEncryptionProvider{
+						{
+							KMS: &v1alpha1.KMS{
+								Name:                "config1",
+								SocketListenAddress: "unix:///var/run/kmsplugin/socket1-new.sock",
+							},
+						},
+						{
+							KMS: &v1alpha1.KMS{
+								Name:                "config2",
+								SocketListenAddress: "unix:///var/run/kmsplugin/socket1-old.sock",
+							},
+						},
+					},
+					Resources: []string{
+						"secrets",
+						"crd1.anywhere.eks.amazonsaws.com",
+					},
+				},
+			},
+			want: clusterapi.ExtraArgs{
+				"encryption-provider-config": "/etc/kubernetes/enc/encryption-config.yaml",
+			},
+		},
+		{
+			name: "multiple configs",
+			etcdEncryption: &[]v1alpha1.EtcdEncryption{
+				{
+					Providers: []v1alpha1.EtcdEncryptionProvider{
+						{
+							KMS: &v1alpha1.KMS{
+								Name:                "config1",
+								SocketListenAddress: "unix:///var/run/kmsplugin/socket1-new.sock",
+							},
+						},
+						{
+							KMS: &v1alpha1.KMS{
+								Name:                "config2",
+								SocketListenAddress: "unix:///var/run/kmsplugin/socket1-old.sock",
+							},
+						},
+					},
+					Resources: []string{
+						"secrets",
+						"crd1.anywhere.eks.amazonsaws.com",
+					},
+				},
+				{
+					Providers: []v1alpha1.EtcdEncryptionProvider{
+						{
+							KMS: &v1alpha1.KMS{
+								Name:                "config3",
+								SocketListenAddress: "unix:///var/run/kmsplugin/socket2-new.sock",
+							},
+						},
+						{
+							KMS: &v1alpha1.KMS{
+								Name:                "config4",
+								SocketListenAddress: "unix:///var/run/kmsplugin/socket2-old.sock",
+							},
+						},
+					},
+					Resources: []string{
+						"configmaps",
+						"crd2.anywhere.eks.amazonsaws.com",
+					},
+				},
+			},
+			want: clusterapi.ExtraArgs{
+				"encryption-provider-config": "/etc/kubernetes/enc/encryption-config.yaml",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(*testing.T) {
+			if got := clusterapi.EtcdEncryptionExtraArgs(tt.etcdEncryption); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("EtcdEncryptionExtraArgs() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFeatureGatesExtraArgs(t *testing.T) {
+	tests := []struct {
+		testName string
+		features []string
+		want     clusterapi.ExtraArgs
+	}{
+		{
+			testName: "no feature gates",
+			features: []string{},
+			want:     nil,
+		},
+		{
+			testName: "single feature gate",
+			features: []string{"feature1=true"},
+			want: clusterapi.ExtraArgs{
+				"feature-gates": "feature1=true",
+			},
+		},
+		{
+			testName: "multiple feature gates",
+			features: []string{"feature1=true", "feature2=false", "feature3=true"},
+			want: clusterapi.ExtraArgs{
+				"feature-gates": "feature1=true,feature2=false,feature3=true",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.testName, func(t *testing.T) {
+			if got := clusterapi.FeatureGatesExtraArgs(tt.features...); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("FeatureGatesExtraArgs() = %v, want %v", got, tt.want)
 			}
 		})
 	}

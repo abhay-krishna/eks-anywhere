@@ -18,8 +18,11 @@ ORIGIN_ORG="eks-anywhere-brew-pr-bot"
 UPSTREAM_ORG="aws"
 YQ_LATEST_RELEASE_URL="https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
 
-wget -qO /usr/local/bin/yq $YQ_LATEST_RELEASE_URL
-chmod a+x /usr/local/bin/yq
+if ! command -v yq &> /dev/null
+then
+  wget -qO /usr/local/bin/yq $YQ_LATEST_RELEASE_URL
+  chmod a+x /usr/local/bin/yq
+fi
 
 curl --silent 'https://anywhere-assets.eks.amazonaws.com/releases/eks-a/manifest.yaml' -o release.yaml
 
@@ -29,10 +32,13 @@ latest_release=$(cat release.yaml | yq e '.spec.releases[] | select(.version == 
 
 for os in darwin linux
 do
-  KEY_URL="${os}_url"
-  KEY_SHA="${os}_sha256"
-  export $KEY_URL=$(cat latest_release.yaml | yq e ".eksABinary.${os}.uri")
-  export $KEY_SHA=$(cat latest_release.yaml | yq e ".eksABinary.${os}.sha256")
+  for arch in arm64 amd64
+  do
+    KEY_URL="${os}_${arch}_url"
+    KEY_SHA="${os}_${arch}_sha256"
+    export $KEY_URL=$(cat latest_release.yaml | yq e ".eksACLI.${os}.${arch}.uri")
+    export $KEY_SHA=$(cat latest_release.yaml | yq e ".eksACLI.${os}.${arch}.sha256")
+  done
 done
 
 # removes the char v from string like => v1.0.1
@@ -54,7 +60,7 @@ then
   exit 1
 fi
 
-envsubst '$VERSION:$darwin_url:$darwin_sha256:$linux_url:$linux_sha256' \
+envsubst '$VERSION:$darwin_arm64_url:$darwin_arm64_sha256:$darwin_amd64_url:$darwin_amd64_sha256:$linux_arm64_url:$linux_arm64_sha256:$linux_amd64_url:$linux_amd64_sha256' \
  < "${EKSA_TEMPLATE}" \
  > "${EKSA_FORMULA}"
 

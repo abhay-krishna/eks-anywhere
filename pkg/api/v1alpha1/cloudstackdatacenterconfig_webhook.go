@@ -16,6 +16,8 @@ package v1alpha1
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,8 +25,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
-
-	"github.com/aws/eks-anywhere/pkg/features"
 )
 
 // log is for logging in this package.
@@ -38,25 +38,32 @@ func (r *CloudStackDatacenterConfig) SetupWebhookWithManager(mgr ctrl.Manager) e
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 
+//+kubebuilder:webhook:path=/mutate-anywhere-eks-amazonaws-com-v1alpha1-cloudstackdatacenterconfig,mutating=true,failurePolicy=fail,sideEffects=None,groups=anywhere.eks.amazonaws.com,resources=cloudstackdatacenterconfigs,verbs=create;update,versions=v1alpha1,name=mutation.cloudstackdatacenterconfig.anywhere.amazonaws.com,admissionReviewVersions={v1,v1beta1}
+
+var _ webhook.Defaulter = &CloudStackDatacenterConfig{}
+
+// Default implements webhook.Defaulter so a webhook will be registered for the type.
+func (r *CloudStackDatacenterConfig) Default() {
+	cloudstackdatacenterconfiglog.Info("Setting up CloudStackDatacenterConfig defaults for", "name", r.Name)
+	r.SetDefaults()
+}
+
 // change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
 //+kubebuilder:webhook:path=/validate-anywhere-eks-amazonaws-com-v1alpha1-cloudstackdatacenterconfig,mutating=false,failurePolicy=fail,sideEffects=None,groups=anywhere.eks.amazonaws.com,resources=cloudstackdatacenterconfigs,verbs=create;update,versions=v1alpha1,name=validation.cloudstackdatacenterconfig.anywhere.amazonaws.com,admissionReviewVersions={v1,v1beta1}
 
 var _ webhook.Validator = &CloudStackDatacenterConfig{}
 
-// ValidateCreate implements webhook.Validator so a webhook will be registered for the type
+// ValidateCreate implements webhook.Validator so a webhook will be registered for the type.
 func (r *CloudStackDatacenterConfig) ValidateCreate() error {
 	cloudstackdatacenterconfiglog.Info("validate create", "name", r.Name)
-	if !features.IsActive(features.CloudStackProvider()) {
-		return apierrors.NewBadRequest("CloudStackProvider feature is not active, preventing CloudStackDataCenterConfig resource creation")
-	}
 	if r.IsReconcilePaused() {
 		cloudstackdatacenterconfiglog.Info("CloudStackDatacenterConfig is paused, so allowing create", "name", r.Name)
 		return nil
 	}
-	return apierrors.NewBadRequest("Creating new CloudStackDatacenterConfig on existing cluster is not supported")
+	return nil
 }
 
-// ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
+// ValidateUpdate implements webhook.Validator so a webhook will be registered for the type.
 func (r *CloudStackDatacenterConfig) ValidateUpdate(old runtime.Object) error {
 	cloudstackdatacenterconfiglog.Info("validate update", "name", r.Name)
 
@@ -81,51 +88,64 @@ func (r *CloudStackDatacenterConfig) ValidateUpdate(old runtime.Object) error {
 	return apierrors.NewInvalid(GroupVersion.WithKind(CloudStackDatacenterKind).GroupKind(), r.Name, allErrs)
 }
 
+func isValidAzConversionName(uuid string) bool {
+	r := regexp.MustCompile("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-4[a-fA-F0-9]{3}-[8|9|aA|bB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}")
+	return r.MatchString(uuid)
+}
+
+func isCapcV1beta1ToV1beta2Upgrade(new, old *CloudStackDatacenterConfigSpec) bool {
+	if len(new.AvailabilityZones) != len(old.AvailabilityZones) {
+		return false
+	}
+	for _, az := range old.AvailabilityZones {
+		if !strings.HasPrefix(az.Name, DefaultCloudStackAZPrefix) {
+			return false
+		}
+	}
+	for _, az := range new.AvailabilityZones {
+		if !isValidAzConversionName(az.Name) {
+			return false
+		}
+	}
+
+	return true
+}
+
 func validateImmutableFieldsCloudStackCluster(new, old *CloudStackDatacenterConfig) field.ErrorList {
 	var allErrs field.ErrorList
+	specPath := field.NewPath("spec")
 
-	if old.Spec.Domain != new.Spec.Domain {
-		allErrs = append(
-			allErrs,
-			field.Invalid(field.NewPath("spec", "domain"), new.Spec.Domain, "field is immutable"),
-		)
+	// Check for CAPC v1beta1 -> CAPC v1beta2 upgrade
+	if isCapcV1beta1ToV1beta2Upgrade(&new.Spec, &old.Spec) {
+		return allErrs
 	}
-	zonesMutated := false
-	if len(old.Spec.Zones) != len(new.Spec.Zones) {
-		zonesMutated = true
-	} else {
-		for i, z := range old.Spec.Zones {
-			if !z.Equal(&new.Spec.Zones[i]) {
-				zonesMutated = true
-				break
+	newAzMap := make(map[string]CloudStackAvailabilityZone)
+	for _, az := range new.Spec.AvailabilityZones {
+		newAzMap[az.Name] = az
+	}
+	atLeastOneAzOverlap := false
+	for _, oldAz := range old.Spec.AvailabilityZones {
+		if newAz, ok := newAzMap[oldAz.Name]; ok {
+			atLeastOneAzOverlap = true
+			if !newAz.Equal(&oldAz) {
+				allErrs = append(
+					allErrs,
+					field.Forbidden(specPath.Child("availabilityZone", oldAz.Name), "availabilityZone is immutable"),
+				)
 			}
 		}
 	}
-	if zonesMutated {
+	if !atLeastOneAzOverlap {
 		allErrs = append(
 			allErrs,
-			field.Invalid(field.NewPath("spec", "zone"), new.Spec.Zones, "field is immutable"),
-		)
-	}
-
-	if old.Spec.Account != new.Spec.Account {
-		allErrs = append(
-			allErrs,
-			field.Invalid(field.NewPath("spec", "account"), new.Spec.Account, "field is immutable"),
-		)
-	}
-
-	if old.Spec.ManagementApiEndpoint != new.Spec.ManagementApiEndpoint {
-		allErrs = append(
-			allErrs,
-			field.Invalid(field.NewPath("spec", "managementApiEndpoint"), new.Spec.ManagementApiEndpoint, "field is immutable"),
+			field.Invalid(field.NewPath("spec", "availabilityZone"), new.Spec.AvailabilityZones, "at least one AvailabilityZone must be shared between new and old CloudStackDatacenterConfig specs"),
 		)
 	}
 
 	return allErrs
 }
 
-// ValidateDelete implements webhook.Validator so a webhook will be registered for the type
+// ValidateDelete implements webhook.Validator so a webhook will be registered for the type.
 func (r *CloudStackDatacenterConfig) ValidateDelete() error {
 	cloudstackdatacenterconfiglog.Info("validate delete", "name", r.Name)
 

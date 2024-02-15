@@ -11,7 +11,7 @@ import (
 	packagesv1 "github.com/aws/eks-anywhere-packages/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/constants"
 	"github.com/aws/eks-anywhere/pkg/logger"
-	"github.com/aws/eks-anywhere/pkg/version"
+	"github.com/aws/eks-anywhere/pkg/semver"
 	releasev1 "github.com/aws/eks-anywhere/release/api/v1alpha1"
 )
 
@@ -29,43 +29,41 @@ type BundleRegistry interface {
 
 type BundleReader struct {
 	kubeConfig    string
-	source        BundleSource
-	kubeVersion   string
+	clusterName   string
 	kubectl       KubectlRunner
 	bundleManager Manager
-	cliVersion    version.Info
 	registry      BundleRegistry
 }
 
-func NewBundleReader(kubeConfig, kubeVersion string, source BundleSource, k KubectlRunner, bm Manager, cli version.Info, reg BundleRegistry) *BundleReader {
+func NewBundleReader(kubeConfig string, clusterName string, k KubectlRunner, bm Manager, reg BundleRegistry) *BundleReader {
 	return &BundleReader{
 		kubeConfig:    kubeConfig,
-		kubeVersion:   kubeVersion,
-		source:        source,
+		clusterName:   clusterName,
 		kubectl:       k,
 		bundleManager: bm,
-		cliVersion:    cli,
 		registry:      reg,
 	}
 }
 
-func (b *BundleReader) GetLatestBundle(ctx context.Context) (*packagesv1.PackageBundle, error) {
-	switch b.source {
-	case Cluster:
-		return b.getActiveBundleFromCluster(ctx)
-	case Registry:
-		return b.getLatestBundleFromRegistry(ctx)
-	default:
-		return nil, fmt.Errorf("unknown source: %q", b.source)
+func (b *BundleReader) GetLatestBundle(ctx context.Context, kubeVersion string) (*packagesv1.PackageBundle, error) {
+	if len(kubeVersion) > 0 {
+		return b.getLatestBundleFromRegistry(ctx, kubeVersion)
 	}
+	return b.getActiveBundleFromCluster(ctx)
 }
 
-func (b *BundleReader) getLatestBundleFromRegistry(ctx context.Context) (*packagesv1.PackageBundle, error) {
+func (b *BundleReader) getLatestBundleFromRegistry(ctx context.Context, kubeVersion string) (*packagesv1.PackageBundle, error) {
 	registryBaseRef, err := b.registry.GetRegistryBaseRef(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return b.bundleManager.LatestBundle(ctx, registryBaseRef)
+
+	kubeSemVer, err := semver.New(kubeVersion + ".0")
+	if err != nil {
+		return nil, err
+	}
+
+	return b.bundleManager.LatestBundle(ctx, registryBaseRef, fmt.Sprintf("%d", kubeSemVer.Major), fmt.Sprintf("%d", kubeSemVer.Minor), "")
 }
 
 func (b *BundleReader) getActiveBundleFromCluster(ctx context.Context) (*packagesv1.PackageBundle, error) {
@@ -81,8 +79,11 @@ func (b *BundleReader) getActiveBundleFromCluster(ctx context.Context) (*package
 	return bundle, nil
 }
 
-func (b *BundleReader) getPackageBundle(ctx context.Context, activeBundle string) (*packagesv1.PackageBundle, error) {
-	params := []string{"get", "packageBundle", "-o", "json", "--kubeconfig", b.kubeConfig, "--namespace", constants.EksaPackagesName, activeBundle}
+func (b *BundleReader) getPackageBundle(ctx context.Context, bundleName string) (*packagesv1.PackageBundle, error) {
+	params := []string{"get", "packageBundle", "-o", "json", "--kubeconfig", b.kubeConfig, "--namespace", constants.EksaPackagesName, bundleName}
+	if bundleName == "" {
+		return nil, fmt.Errorf("no bundle name specified")
+	}
 	stdOut, err := b.kubectl.ExecuteCommand(ctx, params...)
 	if err != nil {
 		return nil, err
@@ -95,7 +96,7 @@ func (b *BundleReader) getPackageBundle(ctx context.Context, activeBundle string
 }
 
 func (b *BundleReader) GetActiveController(ctx context.Context) (*packagesv1.PackageBundleController, error) {
-	params := []string{"get", "packageBundleController", "-o", "json", "--kubeconfig", b.kubeConfig, "--namespace", constants.EksaPackagesName, packagesv1.PackageBundleControllerName}
+	params := []string{"get", "packageBundleController", "-o", "json", "--kubeconfig", b.kubeConfig, "--namespace", constants.EksaPackagesName, b.clusterName}
 	stdOut, err := b.kubectl.ExecuteCommand(ctx, params...)
 	if err != nil {
 		return nil, err
@@ -107,17 +108,18 @@ func (b *BundleReader) GetActiveController(ctx context.Context) (*packagesv1.Pac
 	return obj, nil
 }
 
-func (b *BundleReader) UpgradeBundle(ctx context.Context, controller *packagesv1.PackageBundleController, newBundle string) error {
-	controller.Spec.ActiveBundle = newBundle
+func (b *BundleReader) UpgradeBundle(ctx context.Context, controller *packagesv1.PackageBundleController, newBundleVersion string) error {
+	controller.Spec.ActiveBundle = newBundleVersion
 	controllerYaml, err := yaml.Marshal(controller)
 	if err != nil {
 		return err
 	}
 	params := []string{"apply", "-f", "-", "--kubeconfig", b.kubeConfig}
-	_, err = b.kubectl.CreateFromYaml(ctx, controllerYaml, params...)
+	stdOut, err := b.kubectl.ExecuteFromYaml(ctx, controllerYaml, params...)
 	if err != nil {
 		return err
 	}
+	fmt.Print(&stdOut)
 	return nil
 }
 

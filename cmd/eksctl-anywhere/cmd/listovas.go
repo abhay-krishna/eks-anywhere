@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"sigs.k8s.io/yaml"
 
 	eksav1alpha1 "github.com/aws/eks-anywhere/pkg/api/v1alpha1"
@@ -17,7 +19,8 @@ import (
 )
 
 type listOvasOptions struct {
-	fileName string
+	fileName        string
+	bundlesOverride string
 }
 
 type listOvasOutput struct {
@@ -31,6 +34,7 @@ var listOvaOpts = &listOvasOptions{}
 func init() {
 	listCmd.AddCommand(listOvasCmd)
 	listOvasCmd.Flags().StringVarP(&listOvaOpts.fileName, "filename", "f", "", "Filename that contains EKS-A cluster configuration")
+	listOvasCmd.Flags().StringVarP(&listOvaOpts.bundlesOverride, "bundles-override", "", "", "Override default Bundles manifest (not recommended)")
 	err := listOvasCmd.MarkFlagRequired("filename")
 	if err != nil {
 		log.Fatalf("Error marking filename flag as required: %v", err)
@@ -44,26 +48,41 @@ var listOvasCmd = &cobra.Command{
 	PreRunE:      preRunListOvasCmd,
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := listOvas(cmd.Context(), listOvaOpts.fileName); err != nil {
+		if err := listOvas(cmd.Context(), listOvaOpts.fileName, listOvaOpts.bundlesOverride); err != nil {
 			return err
 		}
 		return nil
 	},
 }
 
-func listOvas(context context.Context, spec string) error {
-	clusterSpec, err := cluster.NewSpecFromClusterConfig(spec, version.Get())
+func listOvas(context context.Context, clusterSpecPath, bundlesOverride string) error {
+	var specOpts []cluster.FileSpecBuilderOpt
+	if bundlesOverride != "" {
+		specOpts = append(specOpts, cluster.WithOverrideBundlesManifest(bundlesOverride))
+	}
+	clusterSpec, err := readAndValidateClusterSpec(clusterSpecPath, version.Get(), specOpts...)
 	if err != nil {
 		return err
 	}
 
-	bundle := clusterSpec.VersionsBundle
+	for _, version := range clusterSpec.Cluster.KubernetesVersions() {
+		bundle := clusterSpec.VersionsBundle(version)
+		err := printOvas(bundle)
+		if err != nil {
+			return err
+		}
+	}
 
+	return nil
+}
+
+func printOvas(bundle *cluster.VersionsBundle) error {
+	titler := cases.Title(language.English)
 	for _, ova := range bundle.Ovas() {
 		if strings.Contains(ova.URI, string(eksav1alpha1.Bottlerocket)) {
-			fmt.Printf("%s:\n", strings.Title(string(eksav1alpha1.Bottlerocket)))
+			fmt.Printf("%s:\n", titler.String(string(eksav1alpha1.Bottlerocket)))
 		} else {
-			fmt.Printf("%s:\n", strings.Title(string(eksav1alpha1.Ubuntu)))
+			fmt.Printf("%s:\n", titler.String(string(eksav1alpha1.Ubuntu)))
 		}
 		output := listOvasOutput{
 			URI:    ova.URI,
@@ -76,7 +95,6 @@ func listOvas(context context.Context, spec string) error {
 		}
 		fmt.Println(yamlIndent(2, string(yamlOutput)))
 	}
-
 	return nil
 }
 

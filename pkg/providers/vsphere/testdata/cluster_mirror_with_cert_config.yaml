@@ -36,6 +36,11 @@ spec:
   registryMirrorConfiguration:
     endpoint: 1.2.3.4
     port: 1234
+    ociNamespaces:
+      - registry: "public.ecr.aws"
+        namespace: "eks-anywhere"
+      - registry: "783794618700.dkr.ecr.us-west-2.amazonaws.com"
+        namespace: "curated-packages"
     caCertContent: |
       -----BEGIN CERTIFICATE-----
       MIICxjCCAa6gAwIBAgIJAInAeEdpH2uNMA0GCSqGSIb3DQEBBQUAMBUxEzARBgNV
@@ -61,6 +66,7 @@ metadata:
   name: test-cp
 spec:
   diskGiB: 25
+  cloneMode: linkedClone
   datastore: "/SDDC-Datacenter/datastore/WorkloadDatastore"
   folder: "/SDDC-Datacenter/vm"
   memoryMiB: 8192
@@ -80,6 +86,7 @@ metadata:
   name: test-wn
 spec:
   diskGiB: 25
+  cloneMode: linkedClone
   datastore: "/SDDC-Datacenter/datastore/WorkloadDatastore"
   folder: "/SDDC-Datacenter/vm"
   memoryMiB: 4096
@@ -99,6 +106,7 @@ metadata:
   name: test-etcd
 spec:
   diskGiB: 25
+  cloneMode: linkedClone
   datastore: "/SDDC-Datacenter/datastore/WorkloadDatastore"
   folder: "/SDDC-Datacenter/vm"
   memoryMiB: 4096

@@ -6,23 +6,25 @@ import (
 
 	"github.com/aws/eks-anywhere/pkg/cluster"
 	"github.com/aws/eks-anywhere/pkg/logger"
+	"github.com/aws/eks-anywhere/pkg/manifests"
 	"github.com/aws/eks-anywhere/pkg/types"
 )
 
-type Client interface {
-	ApplyKubeSpecFromBytes(ctx context.Context, cluster *types.Cluster, data []byte) error
-}
-
+// Upgrader allows to upgrade a kindnetd installation in a EKS-A cluster.
 type Upgrader struct {
 	client Client
+	reader manifests.FileReader
 }
 
-func NewUpgrader(client Client) *Upgrader {
+// NewUpgrader constructs a new Upgrader.
+func NewUpgrader(client Client, reader manifests.FileReader) *Upgrader {
 	return &Upgrader{
 		client: client,
+		reader: reader,
 	}
 }
 
+// Upgrade configures a kindnetd installation to match the desired state in the cluster Spec.
 func (u Upgrader) Upgrade(ctx context.Context, cluster *types.Cluster, currentSpec, newSpec *cluster.Spec, namespaces []string) (*types.ChangeDiff, error) {
 	diff := kindnetdChangeDiff(currentSpec, newSpec)
 	if diff == nil {
@@ -30,7 +32,7 @@ func (u Upgrader) Upgrade(ctx context.Context, cluster *types.Cluster, currentSp
 		return nil, nil
 	}
 
-	manifest, err := generateManifest(newSpec)
+	manifest, err := generateManifest(u.reader, newSpec)
 	if err != nil {
 		return nil, err
 	}
@@ -43,13 +45,21 @@ func (u Upgrader) Upgrade(ctx context.Context, cluster *types.Cluster, currentSp
 }
 
 func kindnetdChangeDiff(currentSpec, newSpec *cluster.Spec) *types.ComponentChangeDiff {
-	if currentSpec.VersionsBundle.Kindnetd.Version == newSpec.VersionsBundle.Kindnetd.Version {
+	currentVersionsBundle := currentSpec.RootVersionsBundle()
+	newVersionsBundle := newSpec.RootVersionsBundle()
+	if currentVersionsBundle.Kindnetd.Version == newVersionsBundle.Kindnetd.Version {
 		return nil
 	}
 
 	return &types.ComponentChangeDiff{
 		ComponentName: "kindnetd",
-		OldVersion:    currentSpec.VersionsBundle.Kindnetd.Version,
-		NewVersion:    newSpec.VersionsBundle.Kindnetd.Version,
+		OldVersion:    currentVersionsBundle.Kindnetd.Version,
+		NewVersion:    newVersionsBundle.Kindnetd.Version,
 	}
+}
+
+// RunPostControlPlaneUpgradeSetup satisfies the clustermanager.Networking interface.
+// It is a noop for kindnetd.
+func (u Upgrader) RunPostControlPlaneUpgradeSetup(_ context.Context, _ *types.Cluster) error {
+	return nil
 }

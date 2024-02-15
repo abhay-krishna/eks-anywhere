@@ -1,6 +1,8 @@
 package api
 
 import (
+	"os"
+
 	anywherev1 "github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 )
 
@@ -33,6 +35,13 @@ func WithFolder(value string) VSphereMachineConfigFiller {
 	}
 }
 
+// WithTags add provided tags to all machines.
+func WithTags(value []string) VSphereMachineConfigFiller {
+	return func(m *anywherev1.VSphereMachineConfig) {
+		m.Spec.TagIDs = value
+	}
+}
+
 func WithResourcePool(value string) VSphereMachineConfigFiller {
 	return func(m *anywherev1.VSphereMachineConfig) {
 		m.Spec.ResourcePool = value
@@ -57,10 +66,12 @@ func WithSSHKey(value string) VSphereMachineConfigFiller {
 	}
 }
 
-func setSSHKeyForFirstUser(m *anywherev1.VSphereMachineConfig, key string) {
-	if len(m.Spec.Users) == 0 {
-		m.Spec.Users = []anywherev1.UserConfiguration{{}}
-	}
+// WithStringFromEnvVar returns a VSphereMachineConfigFiller function with the value from an envVar passed to it.
+func WithStringFromEnvVar(envVar string, opt func(string) VSphereMachineConfigFiller) VSphereMachineConfigFiller {
+	return opt(os.Getenv(envVar))
+}
 
+func setSSHKeyForFirstUser(m *anywherev1.VSphereMachineConfig, key string) {
+	m.SetUserDefaults()
 	m.Spec.Users[0].SshAuthorizedKeys = []string{key}
 }

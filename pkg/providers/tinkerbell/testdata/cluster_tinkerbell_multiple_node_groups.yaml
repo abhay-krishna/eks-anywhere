@@ -13,6 +13,11 @@ spec:
       cidrBlocks:
         - 10.96.0.0/12
   controlPlaneConfiguration:
+    upgradeRolloutStrategy:
+      type: "RollingUpdate"
+      rollingUpdate:
+        maxSurge: 1
+        maxUnavailable: 0
     count: 1
     endpoint:
       host: 1.2.3.4
@@ -30,11 +35,21 @@ spec:
       machineGroupRef:
         name: test-md
         kind: TinkerbellMachineConfig
+      upgradeRolloutStrategy:
+        type: "RollingUpdate"
+        rollingUpdate:
+          maxSurge: 1
+          maxUnavailable: 0
       name: md-0
     - count: 1
       machineGroupRef:
         name: test-md
         kind: TinkerbellMachineConfig
+      upgradeRolloutStrategy:
+        type: "RollingUpdate"
+        rollingUpdate:
+          maxSurge: 5
+          maxUnavailable: 3
       name: md-1
 
 ---
@@ -44,7 +59,8 @@ metadata:
   name: test
   namespace: test-namespace
 spec:
-  tinkerbellIP: "1.2.3.4"
+  tinkerbellIP: "5.6.7.8"
+  osImageURL: "https://ubuntu-1.21.gz"
 
 ---
 apiVersion: anywhere.eks.amazonaws.com/v1alpha1

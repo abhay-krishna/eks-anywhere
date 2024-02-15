@@ -1,10 +1,8 @@
 package curatedpackages_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -16,23 +14,25 @@ import (
 	"github.com/aws/eks-anywhere/pkg/curatedpackages"
 	"github.com/aws/eks-anywhere/pkg/curatedpackages/mocks"
 	"github.com/aws/eks-anywhere/pkg/kubeconfig"
-	"github.com/aws/eks-anywhere/release/api/v1alpha1"
 )
 
 type packageInstallerTest struct {
 	*WithT
-	ctx            context.Context
-	chartInstaller *mocks.MockChartInstaller
-	kubectlRunner  *mocks.MockKubectlRunner
-	spec           *cluster.Spec
-	command        *curatedpackages.Installer
-	packagePath    string
+	ctx                     context.Context
+	kubectlRunner           *mocks.MockKubectlRunner
+	packageClient           *mocks.MockPackageHandler
+	packageControllerClient *mocks.MockPackageController
+	spec                    *cluster.Spec
+	command                 *curatedpackages.Installer
+	packagePath             string
+	kubeConfigPath          string
 }
 
 func newPackageInstallerTest(t *testing.T) *packageInstallerTest {
 	ctrl := gomock.NewController(t)
 	k := mocks.NewMockKubectlRunner(ctrl)
-	c := mocks.NewMockChartInstaller(ctrl)
+	pc := mocks.NewMockPackageHandler(ctrl)
+	pcc := mocks.NewMockPackageController(ctrl)
 	packagesPath := "/test/package.yaml"
 	spec := &cluster.Spec{
 		Config: &cluster.Config{
@@ -42,70 +42,78 @@ func newPackageInstallerTest(t *testing.T) *packageInstallerTest {
 				},
 			},
 		},
-		VersionsBundle: &cluster.VersionsBundle{
-			VersionsBundle: &v1alpha1.VersionsBundle{
-				PackageController: v1alpha1.PackageBundle{
-					HelmChart: v1alpha1.Image{
-						URI:  "test_registry/test/eks-anywhere-packages:v1",
-						Name: "test_chart",
-					},
-				},
-			},
-		},
 	}
+	kubeConfigPath := kubeconfig.FromClusterName(spec.Cluster.Name)
 	return &packageInstallerTest{
-		WithT:          NewWithT(t),
-		ctx:            context.Background(),
-		chartInstaller: c,
-		kubectlRunner:  k,
-		spec:           spec,
-		packagePath:    packagesPath,
-		command:        curatedpackages.NewInstaller(c, k, spec, packagesPath),
+		WithT:                   NewWithT(t),
+		ctx:                     context.Background(),
+		kubectlRunner:           k,
+		spec:                    spec,
+		packagePath:             packagesPath,
+		packageClient:           pc,
+		packageControllerClient: pcc,
+		kubeConfigPath:          kubeConfigPath,
+		command:                 curatedpackages.NewInstaller(k, pc, pcc, spec, packagesPath, kubeConfigPath),
 	}
 }
 
 func TestPackageInstallerSuccess(t *testing.T) {
 	tt := newPackageInstallerTest(t)
 
-	kubeConfigPath := kubeconfig.FromClusterName(tt.spec.Cluster.Name)
-	helmChart := tt.spec.VersionsBundle.PackageController.HelmChart
-	params := []string{"create", "-f", tt.packagePath, "--kubeconfig", kubeConfigPath}
-	registry := curatedpackages.GetRegistry(helmChart.URI)
-	sourceRegistry := fmt.Sprintf("sourceRegistry=%s", registry)
-	values := []string{sourceRegistry}
-	tt.kubectlRunner.EXPECT().ExecuteCommand(tt.ctx, params).Return(bytes.Buffer{}, nil)
-	tt.chartInstaller.EXPECT().InstallChart(tt.ctx, helmChart.Name, "oci://"+helmChart.Image(), helmChart.Tag(), kubeConfigPath, values).Return(nil)
+	tt.packageClient.EXPECT().CreatePackages(tt.ctx, tt.packagePath, tt.kubeConfigPath).Return(nil)
+	tt.packageControllerClient.EXPECT().Enable(tt.ctx).Return(nil)
 
-	err := tt.command.InstallCuratedPackages(tt.ctx)
-	tt.Expect(err).To(BeNil())
+	tt.command.InstallCuratedPackages(tt.ctx)
 }
 
 func TestPackageInstallerFailWhenControllerFails(t *testing.T) {
 	tt := newPackageInstallerTest(t)
 
-	kubeConfigPath := kubeconfig.FromClusterName(tt.spec.Cluster.Name)
-	helmChart := tt.spec.VersionsBundle.PackageController.HelmChart
-	registry := curatedpackages.GetRegistry(helmChart.URI)
-	sourceRegistry := fmt.Sprintf("sourceRegistry=%s", registry)
-	values := []string{sourceRegistry}
-	tt.chartInstaller.EXPECT().InstallChart(tt.ctx, helmChart.Name, "oci://"+helmChart.Image(), helmChart.Tag(), kubeConfigPath, values).Return(errors.New("controller installation failed"))
+	tt.packageControllerClient.EXPECT().Enable(tt.ctx).Return(errors.New("controller installation failed"))
 
-	err := tt.command.InstallCuratedPackages(tt.ctx)
-	tt.Expect(err).NotTo(BeNil())
+	tt.command.InstallCuratedPackages(tt.ctx)
 }
 
 func TestPackageInstallerFailWhenPackageFails(t *testing.T) {
 	tt := newPackageInstallerTest(t)
 
-	kubeConfigPath := kubeconfig.FromClusterName(tt.spec.Cluster.Name)
-	helmChart := tt.spec.VersionsBundle.PackageController.HelmChart
-	params := []string{"create", "-f", tt.packagePath, "--kubeconfig", kubeConfigPath}
-	registry := curatedpackages.GetRegistry(helmChart.URI)
-	sourceRegistry := fmt.Sprintf("sourceRegistry=%s", registry)
-	values := []string{sourceRegistry}
-	tt.kubectlRunner.EXPECT().ExecuteCommand(tt.ctx, params).Return(bytes.Buffer{}, errors.New("path doesn't exist"))
-	tt.chartInstaller.EXPECT().InstallChart(tt.ctx, helmChart.Name, "oci://"+helmChart.Image(), helmChart.Tag(), kubeConfigPath, values).Return(nil)
+	tt.packageClient.EXPECT().CreatePackages(tt.ctx, tt.packagePath, tt.kubeConfigPath).Return(errors.New("path doesn't exist"))
+	tt.packageControllerClient.EXPECT().Enable(tt.ctx).Return(nil)
 
-	err := tt.command.InstallCuratedPackages(tt.ctx)
-	tt.Expect(err).NotTo(BeNil())
+	tt.command.InstallCuratedPackages(tt.ctx)
+}
+
+func TestPackageInstallerDisabled(t *testing.T) {
+	tt := newPackageInstallerTest(t)
+	tt.spec.Cluster.Spec.Packages = &anywherev1.PackageConfiguration{
+		Disable: true,
+	}
+
+	tt.command.InstallCuratedPackages(tt.ctx)
+}
+
+func TestIsPackageControllerDisabled(t *testing.T) {
+	tt := newPackageInstallerTest(t)
+
+	if curatedpackages.IsPackageControllerDisabled(nil) {
+		t.Errorf("nil cluster should be enabled")
+	}
+
+	if curatedpackages.IsPackageControllerDisabled(tt.spec.Cluster) {
+		t.Errorf("nil package controller should be enabled")
+	}
+
+	tt.spec.Cluster.Spec.Packages = &anywherev1.PackageConfiguration{
+		Disable: false,
+	}
+	if curatedpackages.IsPackageControllerDisabled(tt.spec.Cluster) {
+		t.Errorf("package controller should be enabled")
+	}
+
+	tt.spec.Cluster.Spec.Packages = &anywherev1.PackageConfiguration{
+		Disable: true,
+	}
+	if !curatedpackages.IsPackageControllerDisabled(tt.spec.Cluster) {
+		t.Errorf("package controller should be disabled")
+	}
 }

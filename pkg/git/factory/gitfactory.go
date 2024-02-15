@@ -3,7 +3,6 @@ package gitfactory
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -20,6 +19,7 @@ import (
 	"github.com/aws/eks-anywhere/pkg/git"
 	"github.com/aws/eks-anywhere/pkg/git/gitclient"
 	"github.com/aws/eks-anywhere/pkg/git/gogithub"
+	"github.com/aws/eks-anywhere/pkg/git/providers/codecommit"
 	"github.com/aws/eks-anywhere/pkg/git/providers/github"
 )
 
@@ -61,11 +61,19 @@ func Build(ctx context.Context, cluster *v1alpha1.Cluster, fluxConfig *v1alpha1.
 		if err = os.Setenv(config.SshKnownHostsEnv, gitKnownHosts); err != nil {
 			return nil, fmt.Errorf("unable to set %s: %v", config.SshKnownHostsEnv, err)
 		}
-		gitAuth, err = getSshAuthFromPrivateKey(privateKeyFile, privateKeyPassphrase)
+		user := codecommit.DefaultSSHAuthUser
+		repoUrl = fluxConfig.Spec.Git.RepositoryUrl
+		codeCommitUserName, err := codecommit.IsCodeCommitURL(repoUrl)
 		if err != nil {
 			return nil, err
 		}
-		repoUrl = fluxConfig.Spec.Git.RepositoryUrl
+		if codeCommitUserName != "" {
+			user = codeCommitUserName
+		}
+		gitAuth, err = getSSHAuthFromPrivateKey(privateKeyFile, privateKeyPassphrase, user)
+		if err != nil {
+			return nil, err
+		}
 		repo = path.Base(strings.TrimSuffix(repoUrl, filepath.Ext(repoUrl)))
 	default:
 		return nil, fmt.Errorf("no valid git provider in FluxConfigSpec. Spec: %v", fluxConfig)
@@ -125,14 +133,14 @@ func WithRepositoryDirectory(repoDir string) GitToolsOpt {
 	}
 }
 
-func getSshAuthFromPrivateKey(privateKeyFile string, passphrase string) (gogitssh.AuthMethod, error) {
+func getSSHAuthFromPrivateKey(privateKeyFile string, passphrase string, user string) (gogitssh.AuthMethod, error) {
 	signer, err := getSignerFromPrivateKeyFile(privateKeyFile, passphrase)
 	if err != nil {
 		return nil, err
 	}
 	return &gogitssh.PublicKeys{
 		Signer: signer,
-		User:   "git",
+		User:   user,
 	}, nil
 }
 
@@ -140,7 +148,7 @@ func getSignerFromPrivateKeyFile(privateKeyFile string, passphrase string) (ssh.
 	var signer ssh.Signer
 	var err error
 
-	sshKey, err := ioutil.ReadFile(privateKeyFile)
+	sshKey, err := os.ReadFile(privateKeyFile)
 	if err != nil {
 		return nil, err
 	}

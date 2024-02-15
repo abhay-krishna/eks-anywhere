@@ -20,21 +20,20 @@ import (
 )
 
 const (
-	cmkConfigFileName  = "cmk_test_name.ini"
-	cmkConfigFileName2 = "cmk_test_name_2.ini"
-	accountName        = "account1"
-	rootDomain         = "ROOT"
-	rootDomainId       = "5300cdac-74d5-11ec-8696-c81f66d3e965"
-	domain             = "foo/domain1"
-	domainName         = "domain1"
-	domainId           = "7700cdac-74d5-11ec-8696-c81f66d3e965"
-	domain2            = "foo/bar/domain1"
-	domain2Name        = "domain1"
-	domain2Id          = "8800cdac-74d5-11ec-8696-c81f66d3e965"
-	zoneId             = "4e3b338d-87a6-4189-b931-a1747edeea8f"
+	cmkConfigFileName = "cmk_test_name.ini"
+	accountName       = "account1"
+	rootDomain        = "ROOT"
+	rootDomainID      = "5300cdac-74d5-11ec-8696-c81f66d3e965"
+	domain            = "foo/domain1"
+	domainName        = "domain1"
+	domainID          = "7700cdac-74d5-11ec-8696-c81f66d3e965"
+	domain2           = "foo/bar/domain1"
+	domain2Name       = "domain1"
+	domain2ID         = "8800cdac-74d5-11ec-8696-c81f66d3e965"
+	zoneID            = "4e3b338d-87a6-4189-b931-a1747edeea8f"
 )
 
-var execConfig = decoder.CloudStackExecConfig{
+var execConfig = &decoder.CloudStackExecConfig{
 	Profiles: []decoder.CloudStackProfileConfig{
 		{
 			Name:          "test_name",
@@ -45,7 +44,7 @@ var execConfig = decoder.CloudStackExecConfig{
 	},
 }
 
-var execConfigWithMultipleProfiles = decoder.CloudStackExecConfig{
+var execConfigWithMultipleProfiles = &decoder.CloudStackExecConfig{
 	Profiles: []decoder.CloudStackProfileConfig{
 		execConfig.Profiles[0],
 		{
@@ -68,7 +67,7 @@ var resourceName = v1alpha1.CloudStackResourceIdentifier{
 	Name: "TEST_RESOURCE",
 }
 
-var resourceId = v1alpha1.CloudStackResourceIdentifier{
+var resourceID = v1alpha1.CloudStackResourceIdentifier{
 	Id: "TEST_RESOURCE",
 }
 
@@ -101,62 +100,6 @@ var diskOfferingCustomSizeInGB = v1alpha1.CloudStackResourceDiskOffering{
 	Device:     "/dev/vdb",
 	Filesystem: "ext4",
 	Label:      "data_disk",
-}
-
-func TestValidateCloudStackConnectionSuccess(t *testing.T) {
-	_, writer := test.NewWriter(t)
-	ctx := context.Background()
-	mockCtrl := gomock.NewController(t)
-
-	executable := mockexecutables.NewMockExecutable(mockCtrl)
-	configFilePath, _ := filepath.Abs(filepath.Join(writer.Dir(), "generated", cmkConfigFileName))
-	expectedArgs := []string{"-c", configFilePath, "sync"}
-	executable.EXPECT().Execute(ctx, expectedArgs).Return(bytes.Buffer{}, nil)
-	c := executables.NewCmk(executable, writer, execConfig.Profiles)
-	err := c.ValidateCloudStackConnection(ctx, execConfig.Profiles[0].Name)
-	if err != nil {
-		t.Fatalf("Cmk.ValidateCloudStackConnection() error = %v, want nil", err)
-	}
-}
-
-func TestValidateMultipleCloudStackProfiles(t *testing.T) {
-	_, writer := test.NewWriter(t)
-	ctx := context.Background()
-	mockCtrl := gomock.NewController(t)
-
-	executable := mockexecutables.NewMockExecutable(mockCtrl)
-	configFilePath, _ := filepath.Abs(filepath.Join(writer.Dir(), "generated", cmkConfigFileName))
-	expectedArgs := []string{"-c", configFilePath, "sync"}
-	executable.EXPECT().Execute(ctx, expectedArgs).Return(bytes.Buffer{}, nil)
-	configFilePath2, _ := filepath.Abs(filepath.Join(writer.Dir(), "generated", cmkConfigFileName2))
-	expectedArgs2 := []string{"-c", configFilePath2, "sync"}
-	executable.EXPECT().Execute(ctx, expectedArgs2).Return(bytes.Buffer{}, nil)
-
-	c := executables.NewCmk(executable, writer, execConfigWithMultipleProfiles.Profiles)
-	err := c.ValidateCloudStackConnection(ctx, execConfigWithMultipleProfiles.Profiles[0].Name)
-	if err != nil {
-		t.Fatalf("Cmk.ValidateCloudStackConnection() error = %v, want nil", err)
-	}
-	err = c.ValidateCloudStackConnection(ctx, execConfigWithMultipleProfiles.Profiles[1].Name)
-	if err != nil {
-		t.Fatalf("Cmk.ValidateCloudStackConnection() error = %v, want nil", err)
-	}
-}
-
-func TestValidateCloudStackConnectionError(t *testing.T) {
-	_, writer := test.NewWriter(t)
-	ctx := context.Background()
-	mockCtrl := gomock.NewController(t)
-
-	executable := mockexecutables.NewMockExecutable(mockCtrl)
-	configFilePath, _ := filepath.Abs(filepath.Join(writer.Dir(), "generated", cmkConfigFileName))
-	expectedArgs := []string{"-c", configFilePath, "sync"}
-	executable.EXPECT().Execute(ctx, expectedArgs).Return(bytes.Buffer{}, errors.New("cmk test error"))
-	c := executables.NewCmk(executable, writer, execConfig.Profiles)
-	err := c.ValidateCloudStackConnection(ctx, execConfig.Profiles[0].Name)
-	if err == nil {
-		t.Fatalf("Cmk.ValidateCloudStackConnection() didn't throw expected error")
-	}
 }
 
 func TestCmkCleanupVms(t *testing.T) {
@@ -210,7 +153,7 @@ func TestCmkCleanupVms(t *testing.T) {
 				return cmk.CleanupVms(ctx, execConfig.Profiles[0].Name, clusterName, false)
 			},
 			cmkResponseError: nil,
-			wantErr:          true,
+			wantErr:          false,
 		},
 		{
 			testName:         "listaffinitygroups json parse exception",
@@ -257,22 +200,25 @@ func TestCmkCleanupVms(t *testing.T) {
 			ctx := context.Background()
 			mockCtrl := gomock.NewController(t)
 
-			var tctx testContext
-			tctx.SaveContext()
-			defer tctx.RestoreContext()
-
 			executable := mockexecutables.NewMockExecutable(mockCtrl)
 			for _, argsList := range tt.argumentsExecCalls {
 				executable.EXPECT().Execute(ctx, argsList).
 					Return(*bytes.NewBufferString(fileContent), tt.cmkResponseError)
 			}
-			cmk := executables.NewCmk(executable, writer, execConfig.Profiles)
+			cmk, _ := executables.NewCmk(executable, writer, execConfig)
 			err := tt.cmkFunc(*cmk, ctx)
 			if tt.wantErr && err != nil || !tt.wantErr && err == nil {
 				return
 			}
 			t.Fatalf("Cmk error: %v", err)
 		})
+	}
+}
+
+func TestNewCmkNilConfig(t *testing.T) {
+	_, err := executables.NewCmk(nil, nil, nil)
+	if err == nil {
+		t.Fatalf("Expected cmk to fail on creation with nil config but instead it succeeded")
 	}
 }
 
@@ -296,9 +242,9 @@ func TestCmkListOperations(t *testing.T) {
 				"list", "domains", fmt.Sprintf("name=\"%s\"", rootDomain), "listall=true",
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				domainId, err := cmk.ValidateDomainAndGetId(ctx, execConfig.Profiles[0].Name, rootDomain)
-				if domainId != rootDomainId {
-					t.Fatalf("Expected domain id: %s, actual domain id: %s", rootDomainId, domainId)
+				domainID, err := cmk.ValidateDomainAndGetId(ctx, execConfig.Profiles[0].Name, rootDomain)
+				if domainID != rootDomainID {
+					t.Fatalf("Expected domain id: %s, actual domain id: %s", rootDomainID, domainID)
 				}
 				return err
 			},
@@ -314,9 +260,9 @@ func TestCmkListOperations(t *testing.T) {
 				"list", "domains", fmt.Sprintf("name=\"%s\"", domainName), "listall=true",
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				actualDomainId, err := cmk.ValidateDomainAndGetId(ctx, execConfig.Profiles[0].Name, domain)
-				if actualDomainId != domainId {
-					t.Fatalf("Expected domain id: %s, actual domain id: %s", domainId, actualDomainId)
+				actualDomainID, err := cmk.ValidateDomainAndGetId(ctx, execConfig.Profiles[0].Name, domain)
+				if actualDomainID != domainID {
+					t.Fatalf("Expected domain id: %s, actual domain id: %s", domainID, actualDomainID)
 				}
 				return err
 			},
@@ -347,9 +293,9 @@ func TestCmkListOperations(t *testing.T) {
 				"list", "domains", fmt.Sprintf("name=\"%s\"", domain2Name), "listall=true",
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				domainId, err := cmk.ValidateDomainAndGetId(ctx, execConfig.Profiles[0].Name, domain2)
-				if domainId != domain2Id {
-					t.Fatalf("Expected domain id: %s, actual domain id: %s", domain2Id, domainId)
+				domainID, err := cmk.ValidateDomainAndGetId(ctx, execConfig.Profiles[0].Name, domain2)
+				if domainID != domain2ID {
+					t.Fatalf("Expected domain id: %s, actual domain id: %s", domain2ID, domainID)
 				}
 				return err
 			},
@@ -392,10 +338,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_account_singular.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "accounts", fmt.Sprintf("name=\"%s\"", accountName), fmt.Sprintf("domainid=\"%s\"", domainId),
+				"list", "accounts", fmt.Sprintf("name=\"%s\"", accountName), fmt.Sprintf("domainid=\"%s\"", domainID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateAccountPresent(ctx, execConfig.Profiles[0].Name, accountName, domainId)
+				return cmk.ValidateAccountPresent(ctx, execConfig.Profiles[0].Name, accountName, domainID)
 			},
 			cmkResponseError: nil,
 			wantErr:          false,
@@ -406,10 +352,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_non_json_response.txt",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "accounts", fmt.Sprintf("name=\"%s\"", accountName), fmt.Sprintf("domainid=\"%s\"", domainId),
+				"list", "accounts", fmt.Sprintf("name=\"%s\"", accountName), fmt.Sprintf("domainid=\"%s\"", domainID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateAccountPresent(ctx, execConfig.Profiles[0].Name, accountName, domainId)
+				return cmk.ValidateAccountPresent(ctx, execConfig.Profiles[0].Name, accountName, domainID)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -420,10 +366,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_empty_response.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "accounts", fmt.Sprintf("name=\"%s\"", accountName), fmt.Sprintf("domainid=\"%s\"", domainId),
+				"list", "accounts", fmt.Sprintf("name=\"%s\"", accountName), fmt.Sprintf("domainid=\"%s\"", domainID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateAccountPresent(ctx, execConfig.Profiles[0].Name, accountName, domainId)
+				return cmk.ValidateAccountPresent(ctx, execConfig.Profiles[0].Name, accountName, domainID)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -449,7 +395,7 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_zone_singular.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "zones", fmt.Sprintf("id=\"%s\"", resourceId.Id),
+				"list", "zones", fmt.Sprintf("id=\"%s\"", resourceID.Id),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
 				_, err := cmk.ValidateZoneAndGetId(ctx, execConfig.Profiles[0].Name, zones[2])
@@ -464,7 +410,7 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_zone_multiple.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "zones", fmt.Sprintf("id=\"%s\"", resourceId.Id),
+				"list", "zones", fmt.Sprintf("id=\"%s\"", resourceID.Id),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
 				_, err := cmk.ValidateZoneAndGetId(ctx, execConfig.Profiles[0].Name, zones[2])
@@ -479,7 +425,7 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_zone_none.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "zones", fmt.Sprintf("id=\"%s\"", resourceId.Id),
+				"list", "zones", fmt.Sprintf("id=\"%s\"", resourceID.Id),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
 				_, err := cmk.ValidateZoneAndGetId(ctx, execConfig.Profiles[0].Name, zones[2])
@@ -539,10 +485,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_network_singular.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "networks", fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName), fmt.Sprintf("zoneid=\"%s\"", "TEST_RESOURCE"),
+				"list", "networks", fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName), fmt.Sprintf("zoneid=\"%s\"", "TEST_RESOURCE"),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateNetworkPresent(ctx, execConfig.Profiles[0].Name, domainId, zones[2].Network, zones[2].Id, accountName)
+				return cmk.ValidateNetworkPresent(ctx, execConfig.Profiles[0].Name, domainID, zones[2].Network, zones[2].Id, accountName)
 			},
 			cmkResponseError: nil,
 			wantErr:          false,
@@ -553,10 +499,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_network_multiple.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "networks", fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName), fmt.Sprintf("zoneid=\"%s\"", "TEST_RESOURCE"),
+				"list", "networks", fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName), fmt.Sprintf("zoneid=\"%s\"", "TEST_RESOURCE"),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateNetworkPresent(ctx, execConfig.Profiles[0].Name, domainId, zones[2].Network, zones[2].Id, accountName)
+				return cmk.ValidateNetworkPresent(ctx, execConfig.Profiles[0].Name, domainID, zones[2].Network, zones[2].Id, accountName)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -567,10 +513,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_network_none.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "networks", fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName), fmt.Sprintf("zoneid=\"%s\"", "TEST_RESOURCE"),
+				"list", "networks", fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName), fmt.Sprintf("zoneid=\"%s\"", "TEST_RESOURCE"),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateNetworkPresent(ctx, execConfig.Profiles[0].Name, domainId, zones[2].Network, zones[2].Id, accountName)
+				return cmk.ValidateNetworkPresent(ctx, execConfig.Profiles[0].Name, domainID, zones[2].Network, zones[2].Id, accountName)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -581,10 +527,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_network_multiple.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "networks", fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName), fmt.Sprintf("zoneid=\"%s\"", "TEST_RESOURCE"),
+				"list", "networks", fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName), fmt.Sprintf("zoneid=\"%s\"", "TEST_RESOURCE"),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateNetworkPresent(ctx, execConfig.Profiles[0].Name, domainId, zones[2].Network, zones[2].Id, accountName)
+				return cmk.ValidateNetworkPresent(ctx, execConfig.Profiles[0].Name, domainID, zones[2].Network, zones[2].Id, accountName)
 			},
 			cmkResponseError: errors.New("cmk calling return exception"),
 			wantErr:          true,
@@ -595,10 +541,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_empty_response.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "networks", fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName), fmt.Sprintf("zoneid=\"%s\"", "TEST_RESOURCE"),
+				"list", "networks", fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName), fmt.Sprintf("zoneid=\"%s\"", "TEST_RESOURCE"),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateNetworkPresent(ctx, execConfig.Profiles[0].Name, domainId, zones[2].Network, zones[2].Id, accountName)
+				return cmk.ValidateNetworkPresent(ctx, execConfig.Profiles[0].Name, domainID, zones[2].Network, zones[2].Id, accountName)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -609,10 +555,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_non_json_response.txt",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "networks", fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName), fmt.Sprintf("zoneid=\"%s\"", "TEST_RESOURCE"),
+				"list", "networks", fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName), fmt.Sprintf("zoneid=\"%s\"", "TEST_RESOURCE"),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateNetworkPresent(ctx, execConfig.Profiles[0].Name, domainId, zones[2].Network, zones[2].Id, accountName)
+				return cmk.ValidateNetworkPresent(ctx, execConfig.Profiles[0].Name, domainID, zones[2].Network, zones[2].Id, accountName)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -623,10 +569,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_serviceoffering_singular.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "serviceofferings", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "serviceofferings", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateServiceOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, resourceName)
+				return cmk.ValidateServiceOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, resourceName)
 			},
 			cmkResponseError: nil,
 			wantErr:          false,
@@ -637,10 +583,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_serviceoffering_singular.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "serviceofferings", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "serviceofferings", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateServiceOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, resourceId)
+				return cmk.ValidateServiceOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, resourceID)
 			},
 			cmkResponseError: nil,
 			wantErr:          false,
@@ -651,10 +597,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_empty_response.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "serviceofferings", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "serviceofferings", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateServiceOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, resourceId)
+				return cmk.ValidateServiceOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, resourceID)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -665,10 +611,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_non_json_response.txt",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "serviceofferings", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "serviceofferings", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateServiceOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, resourceName)
+				return cmk.ValidateServiceOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, resourceName)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -679,10 +625,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_diskoffering_singular.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "diskofferings", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "diskofferings", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, diskOfferingResourceName)
+				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, diskOfferingResourceName)
 			},
 			cmkResponseError: nil,
 			wantErr:          false,
@@ -693,10 +639,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_diskoffering_singular.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, diskOfferingResourceID)
+				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, diskOfferingResourceID)
 			},
 			cmkResponseError: nil,
 			wantErr:          false,
@@ -707,10 +653,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_diskoffering_empty.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, diskOfferingResourceID)
+				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, diskOfferingResourceID)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -721,10 +667,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_empty_response.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, diskOfferingResourceID)
+				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, diskOfferingResourceID)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -735,10 +681,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_diskoffering_multiple.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, diskOfferingResourceID)
+				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, diskOfferingResourceID)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -749,10 +695,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_diskoffering_singular_customized.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, diskOfferingCustomSizeInGB)
+				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, diskOfferingCustomSizeInGB)
 			},
 			cmkResponseError: nil,
 			wantErr:          false,
@@ -763,10 +709,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_diskoffering_singular.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, diskOfferingCustomSizeInGB)
+				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, diskOfferingCustomSizeInGB)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -777,10 +723,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_diskoffering_singular_customized.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, diskOfferingResourceID)
+				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, diskOfferingResourceID)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -791,10 +737,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_empty_response.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "diskofferings", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, diskOfferingResourceID)
+				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, diskOfferingResourceID)
 			},
 			cmkResponseError: errors.New("cmk calling return exception"),
 			wantErr:          true,
@@ -805,10 +751,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_non_json_response.txt",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "diskofferings", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneId),
+				"list", "diskofferings", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneID),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneId, diskOfferingResourceName)
+				return cmk.ValidateDiskOfferingPresent(ctx, execConfig.Profiles[0].Name, zoneID, diskOfferingResourceName)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -819,10 +765,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_template_singular.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneId), fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName),
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneID), fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainId, zoneId, accountName, resourceName)
+				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainID, zoneID, accountName, resourceName)
 			},
 			cmkResponseError: nil,
 			wantErr:          false,
@@ -833,7 +779,7 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile:  "testdata/cmk_list_template_singular.json",
 			argumentsExecCall: nil,
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateTemplatePresent(ctx, "xxx", domainId, zoneId, accountName, resourceName)
+				return cmk.ValidateTemplatePresent(ctx, "xxx", domainID, zoneID, accountName, resourceName)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -844,10 +790,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_template_singular.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId), fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName),
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID), fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainId, zoneId, accountName, resourceId)
+				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainID, zoneID, accountName, resourceID)
 			},
 			cmkResponseError: nil,
 			wantErr:          false,
@@ -858,10 +804,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_template_multiple.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId), fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName),
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID), fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainId, zoneId, accountName, resourceId)
+				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainID, zoneID, accountName, resourceID)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -872,10 +818,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_template_none.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId), fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName),
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID), fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainId, zoneId, accountName, resourceId)
+				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainID, zoneID, accountName, resourceID)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -886,10 +832,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_template_none.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("zoneid=\"%s\"", zoneId), fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName),
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("zoneid=\"%s\"", zoneID), fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainId, zoneId, accountName, resourceId)
+				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainID, zoneID, accountName, resourceID)
 			},
 			cmkResponseError: errors.New("cmk calling return exception"),
 			wantErr:          true,
@@ -900,10 +846,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_empty_response.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneId), fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName),
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneID), fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainId, zoneId, accountName, resourceName)
+				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainID, zoneID, accountName, resourceName)
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -914,10 +860,100 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_non_json_response.txt",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneId), fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName),
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("name=\"%s\"", resourceName.Name), fmt.Sprintf("zoneid=\"%s\"", zoneID), fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainId, zoneId, accountName, resourceName)
+				return cmk.ValidateTemplatePresent(ctx, execConfig.Profiles[0].Name, domainID, zoneID, accountName, resourceName)
+			},
+			cmkResponseError: nil,
+			wantErr:          true,
+			wantResultCount:  0,
+		},
+		{
+			testName:         "searchtemplate success on name filter",
+			jsonResponseFile: "testdata/cmk_list_template_singular.json",
+			argumentsExecCall: []string{
+				"-c", configFilePath,
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("name=\"%s\"", resourceName.Name),
+			},
+			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
+				_, err := cmk.SearchTemplate(ctx, execConfig.Profiles[0].Name, resourceName)
+				return err
+			},
+			cmkResponseError: nil,
+			wantErr:          false,
+			wantResultCount:  1,
+		},
+		{
+			testName:         "searchtemplate success on id filter",
+			jsonResponseFile: "testdata/cmk_list_template_singular.json",
+			argumentsExecCall: []string{
+				"-c", configFilePath,
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("id=\"%s\"", resourceID.Id),
+			},
+			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
+				_, err := cmk.SearchTemplate(ctx, execConfig.Profiles[0].Name, resourceID)
+				return err
+			},
+			cmkResponseError: nil,
+			wantErr:          false,
+			wantResultCount:  1,
+		},
+		{
+			testName:         "searchtemplate on none results",
+			jsonResponseFile: "testdata/cmk_list_template_none.json",
+			argumentsExecCall: []string{
+				"-c", configFilePath,
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("name=\"%s\"", resourceName.Name),
+			},
+			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
+				_, err := cmk.SearchTemplate(ctx, execConfig.Profiles[0].Name, resourceName)
+				return err
+			},
+			cmkResponseError: nil,
+			wantErr:          false,
+			wantResultCount:  1,
+		},
+		{
+			testName:         "searchtemplate failure on cmk failure",
+			jsonResponseFile: "testdata/cmk_list_template_none.json",
+			argumentsExecCall: []string{
+				"-c", configFilePath,
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("name=\"%s\"", resourceName.Name),
+			},
+			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
+				_, err := cmk.SearchTemplate(ctx, execConfig.Profiles[0].Name, resourceName)
+				return err
+			},
+			cmkResponseError: errors.New("cmk calling return exception"),
+			wantErr:          true,
+			wantResultCount:  1,
+		},
+		{
+			testName:         "searchtemplate no results",
+			jsonResponseFile: "testdata/cmk_list_empty_response.json",
+			argumentsExecCall: []string{
+				"-c", configFilePath,
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("name=\"%s\"", resourceName.Name),
+			},
+			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
+				_, err := cmk.SearchTemplate(ctx, execConfig.Profiles[0].Name, resourceName)
+				return err
+			},
+			cmkResponseError: nil,
+			wantErr:          false,
+			wantResultCount:  0,
+		},
+		{
+			testName:         "searchtemplate json parse exception",
+			jsonResponseFile: "testdata/cmk_non_json_response.txt",
+			argumentsExecCall: []string{
+				"-c", configFilePath,
+				"list", "templates", "templatefilter=all", "listall=true", fmt.Sprintf("name=\"%s\"", resourceName.Name),
+			},
+			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
+				_, err := cmk.SearchTemplate(ctx, execConfig.Profiles[0].Name, resourceName)
+				return err
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -928,10 +964,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_affinitygroup_singular.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "affinitygroups", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName),
+				"list", "affinitygroups", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateAffinityGroupsPresent(ctx, execConfig.Profiles[0].Name, domainId, accountName, []string{resourceId.Id})
+				return cmk.ValidateAffinityGroupsPresent(ctx, execConfig.Profiles[0].Name, domainID, accountName, []string{resourceID.Id})
 			},
 			cmkResponseError: nil,
 			wantErr:          false,
@@ -942,10 +978,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_list_empty_response.json",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "affinitygroups", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName),
+				"list", "affinitygroups", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateAffinityGroupsPresent(ctx, execConfig.Profiles[0].Name, domainId, accountName, []string{resourceId.Id})
+				return cmk.ValidateAffinityGroupsPresent(ctx, execConfig.Profiles[0].Name, domainID, accountName, []string{resourceID.Id})
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -956,10 +992,10 @@ func TestCmkListOperations(t *testing.T) {
 			jsonResponseFile: "testdata/cmk_non_json_response.txt",
 			argumentsExecCall: []string{
 				"-c", configFilePath,
-				"list", "affinitygroups", fmt.Sprintf("id=\"%s\"", resourceId.Id), fmt.Sprintf("domainid=\"%s\"", domainId), fmt.Sprintf("account=\"%s\"", accountName),
+				"list", "affinitygroups", fmt.Sprintf("id=\"%s\"", resourceID.Id), fmt.Sprintf("domainid=\"%s\"", domainID), fmt.Sprintf("account=\"%s\"", accountName),
 			},
 			cmkFunc: func(cmk executables.Cmk, ctx context.Context) error {
-				return cmk.ValidateAffinityGroupsPresent(ctx, execConfig.Profiles[0].Name, domainId, accountName, []string{resourceId.Id})
+				return cmk.ValidateAffinityGroupsPresent(ctx, execConfig.Profiles[0].Name, domainID, accountName, []string{resourceID.Id})
 			},
 			cmkResponseError: nil,
 			wantErr:          true,
@@ -974,16 +1010,12 @@ func TestCmkListOperations(t *testing.T) {
 			ctx := context.Background()
 			mockCtrl := gomock.NewController(t)
 
-			var tctx testContext
-			tctx.SaveContext()
-			defer tctx.RestoreContext()
-
 			executable := mockexecutables.NewMockExecutable(mockCtrl)
 			if tt.argumentsExecCall != nil {
 				executable.EXPECT().Execute(ctx, tt.argumentsExecCall).
 					Return(*bytes.NewBufferString(fileContent), tt.cmkResponseError)
 			}
-			cmk := executables.NewCmk(executable, writer, execConfig.Profiles)
+			cmk, _ := executables.NewCmk(executable, writer, execConfig)
 			err := tt.cmkFunc(*cmk, ctx)
 			if tt.wantErr && err != nil || !tt.wantErr && err == nil {
 				return
@@ -998,12 +1030,8 @@ func TestCmkGetManagementApiEndpoint(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	tt := NewWithT(t)
 
-	var tctx testContext
-	tctx.SaveContext()
-	defer tctx.RestoreContext()
-
 	executable := mockexecutables.NewMockExecutable(mockCtrl)
-	cmk := executables.NewCmk(executable, writer, execConfigWithMultipleProfiles.Profiles)
+	cmk, _ := executables.NewCmk(executable, writer, execConfigWithMultipleProfiles)
 
 	endpoint, err := cmk.GetManagementApiEndpoint("test_name")
 	tt.Expect(err).To(BeNil())

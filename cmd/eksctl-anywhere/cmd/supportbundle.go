@@ -7,14 +7,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 
-	"github.com/aws/eks-anywhere/pkg/cluster"
 	"github.com/aws/eks-anywhere/pkg/dependencies"
 	"github.com/aws/eks-anywhere/pkg/diagnostics"
 	"github.com/aws/eks-anywhere/pkg/kubeconfig"
-	"github.com/aws/eks-anywhere/pkg/validations"
 	"github.com/aws/eks-anywhere/pkg/version"
 )
 
@@ -34,7 +30,7 @@ var supportbundleCmd = &cobra.Command{
 	Use:          "support-bundle -f my-cluster.yaml",
 	Short:        "Generate a support bundle",
 	Long:         "This command is used to create a support bundle to troubleshoot a cluster",
-	PreRunE:      preRunSupportBundle,
+	PreRunE:      bindFlagsToViper,
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := csbo.validate(cmd.Context()); err != nil {
@@ -67,31 +63,21 @@ func (csbo *createSupportBundleOptions) validate(ctx context.Context) error {
 	}
 
 	kubeconfigPath := kubeconfig.FromClusterName(clusterConfig.Name)
-	if !validations.FileExistsAndIsNotEmpty(kubeconfigPath) {
-		return kubeconfig.NewMissingFileError(kubeconfigPath)
+	if err := kubeconfig.ValidateFilename(kubeconfigPath); err != nil {
+		return err
 	}
 
-	return nil
-}
-
-func preRunSupportBundle(cmd *cobra.Command, args []string) error {
-	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
-		err := viper.BindPFlag(flag.Name, flag)
-		if err != nil {
-			log.Fatalf("Error initializing flags: %v", err)
-		}
-	})
 	return nil
 }
 
 func (csbo *createSupportBundleOptions) createBundle(ctx context.Context, since, sinceTime, bundleConfig string) error {
-	clusterSpec, err := cluster.NewSpecFromClusterConfig(csbo.fileName, version.Get())
+	clusterSpec, err := readAndValidateClusterSpec(csbo.fileName, version.Get())
 	if err != nil {
 		return fmt.Errorf("unable to get cluster config from file: %v", err)
 	}
 
-	deps, err := dependencies.ForSpec(ctx, clusterSpec).
-		WithProvider(csbo.fileName, clusterSpec.Cluster, cc.skipIpCheck, csbo.hardwareFileName, false, csbo.tinkerbellBootstrapIP).
+	deps, err := dependencies.ForSpec(clusterSpec).
+		WithProvider(csbo.fileName, clusterSpec.Cluster, cc.skipIpCheck, csbo.hardwareFileName, false, csbo.tinkerbellBootstrapIP, map[string]bool{}, nil).
 		WithDiagnosticBundleFactory().
 		Build(ctx)
 	if err != nil {

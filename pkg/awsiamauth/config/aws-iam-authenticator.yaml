@@ -92,12 +92,14 @@ spec:
       # run on the host network (don't depend on CNI)
       hostNetwork: true
 
-      # run on each master node
+      # run on each control plane node
       nodeSelector:
-        node-role.kubernetes.io/master: ""
+      {{ .cpNodeSelector | indent 2 }}
       tolerations:
       - effect: NoSchedule 
         key: node-role.kubernetes.io/master
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/control-plane
       - key: CriticalAddonsOnly
         operator: Exists
 {{- if .controlPlaneTaints }}
@@ -180,7 +182,7 @@ spec:
       - name: key
         hostPath:
           path: /var/lib/kubeadm/aws-iam-authenticator/pki/key.pem
-
+{{- if (ne .clusterID "") }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -192,6 +194,7 @@ metadata:
 data:
   config.yaml: |
     clusterID: {{.clusterID}}
+{{- end }}
 
 ---
 # EKS-Style ConfigMap: roles and users can be mapped in the same way as supported on EKS.
@@ -201,11 +204,11 @@ metadata:
   name: aws-auth
   namespace: kube-system
 data:
-{{- if (ne .mapRoles "")}}
+{{- if (ne .mapRoles "") }}
   mapRoles: |
 {{ .mapRoles | indent 4 }}
-{{- end}}
-{{- if (ne .mapUsers "")}}
+{{- end }}
+{{- if (ne .mapUsers "") }}
   mapUsers: |
 {{ .mapUsers | indent 4 }}
-{{- end}}
+{{- end }}

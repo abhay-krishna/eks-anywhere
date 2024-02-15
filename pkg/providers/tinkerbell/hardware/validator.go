@@ -1,9 +1,11 @@
 package hardware
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 
 	apimachineryvalidation "k8s.io/apimachinery/pkg/util/validation"
@@ -125,12 +127,30 @@ func StaticMachineAssertions() MachineAssertion {
 				return fmt.Errorf("BMCIPAddress: %v", err)
 			}
 
-			if m.BMCUsername == "" {
-				return newEmptyFieldError("BMCUsername")
+			if m.BMCOptions == nil || m.BMCOptions.RPC == nil {
+				if m.BMCUsername == "" {
+					return newEmptyFieldError("BMCUsername")
+				}
+
+				if m.BMCPassword == "" {
+					return newEmptyFieldError("BMCPassword")
+				}
+			}
+		}
+
+		if m.VLANID != "" {
+			i, err := strconv.Atoi(m.VLANID)
+			if err != nil {
+				return errors.New("VLANID: must be a string integer")
 			}
 
-			if m.BMCPassword == "" {
-				return newEmptyFieldError("BMCPassword")
+			// valid VLAN IDs are between 1 and 4094 - https://en.m.wikipedia.org/wiki/VLAN#IEEE_802.1Q
+			const (
+				maxVLANID = 4094
+				minVLANID = 1
+			)
+			if i < minVLANID || i > maxVLANID {
+				return errors.New("VLANID: must be between 1 and 4094")
 			}
 		}
 
@@ -231,48 +251,6 @@ func validateLabelValue(v string) error {
 		return fmt.Errorf("%v", strings.Join(errs, "; "))
 	}
 	return nil
-}
-
-// MatchingDisksForSelectors returns an assertion that ensures all machines matching a given entry
-// in selectors specify the same Disk value.
-func MatchingDisksForSelectors(selectors []v1alpha1.HardwareSelector) MachineAssertion {
-	diskCaches := make([]struct {
-		Selector v1alpha1.HardwareSelector
-		Disk     string
-	}, 0, len(selectors))
-
-	for _, selector := range selectors {
-		diskCaches = append(diskCaches, struct {
-			Selector v1alpha1.HardwareSelector
-			Disk     string
-		}{Selector: selector})
-	}
-
-	// For each selector check if the machine matches the selector and whether it matches
-	// any previously observed disks erroring if not.
-	return func(machine Machine) error {
-		for i, cache := range diskCaches {
-			switch {
-			// If we don't match the selector do nothing.
-			case !LabelsMatchSelector(cache.Selector, machine.Labels):
-
-			// If this is the first machine we've observed matching the selector, configure the
-			// disk cache.
-			case cache.Disk == "":
-				diskCaches[i].Disk = machine.Disk
-
-			// We have a machine that matches the selector and we've already cached a disk for
-			// the selector, so ensure the disk for this machine matches the cache.
-			case cache.Disk != machine.Disk:
-				return fmt.Errorf(
-					"disk value's must be the same for all machines matching selector: %v",
-					cache.Selector,
-				)
-			}
-		}
-
-		return nil
-	}
 }
 
 // LabelsMatchSelector ensures all selector key-value pairs can be found in labels.

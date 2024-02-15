@@ -10,17 +10,19 @@
 
 **Conformance test status:** ![Conformance test status](https://codebuild.us-west-2.amazonaws.com/badges?uuid=eyJlbmNyeXB0ZWREYXRhIjoiV2dmeFNqWEJORzUreTdwQzZMc2JaYVZQUDMvaElkNnFwbHdsVkEwV3VlVTJRUDhyRU1DVWtXTTNqMCtSMWU5ZFhJRk03aTR5ZGgxYXBMS0JVcllwMlpRPSIsIml2UGFyYW1ldGVyU3BlYyI6IlBuSWFpMGhBZ2lDbUVGMTYiLCJtYXRlcmlhbFNldFNlcmlhbCI6MX0%3D&branch=main)
 
-Amazon EKS Anywhere is a new deployment option for Amazon EKS that enables you to easily create and operate Kubernetes clusters on-premises with your own virtual machines.
+Amazon EKS Anywhere is a new deployment option for Amazon EKS that enables you to easily create and operate Kubernetes clusters on-premises with your own virtual machines or bare metal hosts.
 It brings a consistent AWS management experience to your data center, building on the strengths of [Amazon EKS Distro](https://github.com/aws/eks-distro), the same distribution of Kubernetes that powers EKS on AWS.
 Its goal is to include full lifecycle management of multiple Kubernetes clusters that are capable of operating completely independently of any AWS services.
 
 Here are the steps for [getting started](https://anywhere.eks.amazonaws.com/docs/getting-started/) with EKS Anywhere.
 Full documentation for releases can be found on [https://anywhere.eks.amazonaws.com](https://anywhere.eks.amazonaws.com/).
 
-[<img src="docs/static/images/certified-kubernetes-1.22-color.svg" height=150>](https://github.com/cncf/k8s-conformance/pull/1872)
 <!-- 
 Source: https://github.com/cncf/artwork/tree/master/projects/kubernetes/certified-kubernetes
 -->
+[<img src="docs/static/images/certified-kubernetes-1.25-pantone.svg" height=150>](https://github.com/cncf/k8s-conformance/pull/2454)
+[<img src="docs/static/images/certified-kubernetes-1.26-pantone.svg" height=150>](https://github.com/cncf/k8s-conformance/pull/2531)
+[<img src="docs/static/images/certified-kubernetes-1.27-pantone.svg" height=150>](https://github.com/cncf/k8s-conformance/pull/2636)
 
 ## Development
 

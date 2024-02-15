@@ -12,7 +12,7 @@ import (
 	"github.com/aws/eks-anywhere/pkg/providers/validator"
 )
 
-func TestValidateControlPlaneIpUniqueness(t *testing.T) {
+func TestValidateControlPlaneIPUniqueness(t *testing.T) {
 	g := NewWithT(t)
 	cluster := &v1alpha1.Cluster{
 		Spec: v1alpha1.ClusterSpec{
@@ -26,7 +26,27 @@ func TestValidateControlPlaneIpUniqueness(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	client := mocks.NewMockNetClient(ctrl)
 	client.EXPECT().DialTimeout(gomock.Any(), gomock.Any(), gomock.Any()).
-		Times(5).
 		Return(nil, errors.New("no connection"))
-	g.Expect(validator.ValidateControlPlaneIpUniqueness(cluster, client)).To(Succeed())
+	ipValidator := validator.NewIPValidator(validator.CustomNetClient(client))
+
+	g.Expect(ipValidator.ValidateControlPlaneIPUniqueness(cluster)).To(Succeed())
+}
+
+func TestSkipValidateControlPlaneIPUniqueness(t *testing.T) {
+	g := NewWithT(t)
+	cluster := &v1alpha1.Cluster{
+		Spec: v1alpha1.ClusterSpec{
+			ControlPlaneConfiguration: v1alpha1.ControlPlaneConfiguration{
+				Endpoint: &v1alpha1.Endpoint{
+					Host: "1.2.3.4",
+				},
+			},
+		},
+	}
+	cluster.DisableControlPlaneIPCheck()
+	ctrl := gomock.NewController(t)
+	client := mocks.NewMockNetClient(ctrl)
+	ipValidator := validator.NewIPValidator(validator.CustomNetClient(client))
+
+	g.Expect(ipValidator.ValidateControlPlaneIPUniqueness(cluster)).To(BeNil())
 }

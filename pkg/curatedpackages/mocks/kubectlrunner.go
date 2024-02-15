@@ -10,6 +10,7 @@ import (
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
+	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
 // MockKubectlRunner is a mock of KubectlRunner interface.
@@ -35,26 +36,6 @@ func (m *MockKubectlRunner) EXPECT() *MockKubectlRunnerMockRecorder {
 	return m.recorder
 }
 
-// CreateFromYaml mocks base method.
-func (m *MockKubectlRunner) CreateFromYaml(ctx context.Context, yaml []byte, opts ...string) (bytes.Buffer, error) {
-	m.ctrl.T.Helper()
-	varargs := []interface{}{ctx, yaml}
-	for _, a := range opts {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "CreateFromYaml", varargs...)
-	ret0, _ := ret[0].(bytes.Buffer)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// CreateFromYaml indicates an expected call of CreateFromYaml.
-func (mr *MockKubectlRunnerMockRecorder) CreateFromYaml(ctx, yaml interface{}, opts ...interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	varargs := append([]interface{}{ctx, yaml}, opts...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateFromYaml", reflect.TypeOf((*MockKubectlRunner)(nil).CreateFromYaml), varargs...)
-}
-
 // ExecuteCommand mocks base method.
 func (m *MockKubectlRunner) ExecuteCommand(ctx context.Context, opts ...string) (bytes.Buffer, error) {
 	m.ctrl.T.Helper()
@@ -75,17 +56,51 @@ func (mr *MockKubectlRunnerMockRecorder) ExecuteCommand(ctx interface{}, opts ..
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecuteCommand", reflect.TypeOf((*MockKubectlRunner)(nil).ExecuteCommand), varargs...)
 }
 
-// GetResource mocks base method.
-func (m *MockKubectlRunner) GetResource(ctx context.Context, resourceType, name, kubeconfig, namespace string) (bool, error) {
+// ExecuteFromYaml mocks base method.
+func (m *MockKubectlRunner) ExecuteFromYaml(ctx context.Context, yaml []byte, opts ...string) (bytes.Buffer, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetResource", ctx, resourceType, name, kubeconfig, namespace)
+	varargs := []interface{}{ctx, yaml}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "ExecuteFromYaml", varargs...)
+	ret0, _ := ret[0].(bytes.Buffer)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ExecuteFromYaml indicates an expected call of ExecuteFromYaml.
+func (mr *MockKubectlRunnerMockRecorder) ExecuteFromYaml(ctx, yaml interface{}, opts ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, yaml}, opts...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecuteFromYaml", reflect.TypeOf((*MockKubectlRunner)(nil).ExecuteFromYaml), varargs...)
+}
+
+// GetObject mocks base method.
+func (m *MockKubectlRunner) GetObject(ctx context.Context, resourceType, name, namespece, kubeconfig string, obj runtime.Object) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetObject", ctx, resourceType, name, namespece, kubeconfig, obj)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// GetObject indicates an expected call of GetObject.
+func (mr *MockKubectlRunnerMockRecorder) GetObject(ctx, resourceType, name, namespece, kubeconfig, obj interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetObject", reflect.TypeOf((*MockKubectlRunner)(nil).GetObject), ctx, resourceType, name, namespece, kubeconfig, obj)
+}
+
+// HasResource mocks base method.
+func (m *MockKubectlRunner) HasResource(ctx context.Context, resourceType, name, kubeconfig, namespace string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HasResource", ctx, resourceType, name, kubeconfig, namespace)
 	ret0, _ := ret[0].(bool)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetResource indicates an expected call of GetResource.
-func (mr *MockKubectlRunnerMockRecorder) GetResource(ctx, resourceType, name, kubeconfig, namespace interface{}) *gomock.Call {
+// HasResource indicates an expected call of HasResource.
+func (mr *MockKubectlRunnerMockRecorder) HasResource(ctx, resourceType, name, kubeconfig, namespace interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetResource", reflect.TypeOf((*MockKubectlRunner)(nil).GetResource), ctx, resourceType, name, kubeconfig, namespace)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasResource", reflect.TypeOf((*MockKubectlRunner)(nil).HasResource), ctx, resourceType, name, kubeconfig, namespace)
 }

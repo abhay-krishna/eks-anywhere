@@ -14,7 +14,7 @@ type linuxDockerExecutable struct {
 }
 
 // This currently returns a linuxDockerExecutable, but if we support other types of docker executables we can change
-// the name of this constructor
+// the name of this constructor.
 func NewDockerExecutable(cli string, containerName string) Executable {
 	return &linuxDockerExecutable{
 		cli:           cli,
@@ -39,7 +39,7 @@ func (e *linuxDockerExecutable) Command(ctx context.Context, args ...string) *Co
 }
 
 func (e *linuxDockerExecutable) Run(cmd *Command) (stdout bytes.Buffer, err error) {
-	return execute(cmd.ctx, "docker", cmd.stdIn, e.buildCommand(cmd.envVars, e.cli, cmd.args...)...)
+	return execute(cmd.ctx, "docker", cmd.stdIn, cmd.envVars, e.buildCommand(cmd.envVars, e.cli, cmd.args...)...)
 }
 
 func (e *linuxDockerExecutable) buildCommand(envs map[string]string, cli string, args ...string) []string {

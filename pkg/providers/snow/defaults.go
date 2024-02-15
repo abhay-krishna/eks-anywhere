@@ -4,45 +4,64 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/aws"
+	"github.com/aws/eks-anywhere/pkg/cluster"
 	"github.com/aws/eks-anywhere/pkg/filewriter"
 	"github.com/aws/eks-anywhere/pkg/logger"
 	"github.com/aws/eks-anywhere/pkg/providers/common"
 )
 
 type Defaulters struct {
-	awsClientMap AwsClientMap
-	writer       filewriter.FileWriter
-	keyGenerator SshKeyGenerator
+	clientRegistry ClientRegistry
+	writer         filewriter.FileWriter
+	keyGenerator   SshKeyGenerator
+	uuid           uuid.UUID
 }
 
 type SshKeyGenerator interface {
 	GenerateSSHAuthKey(filewriter.FileWriter) (string, error)
 }
 
-func NewDefaulters(aws aws.Clients, writer filewriter.FileWriter) *Defaulters {
-	return &Defaulters{
-		awsClientMap: NewAwsClientMap(aws),
-		writer:       writer,
-		keyGenerator: common.SshAuthKeyGenerator{},
+type DefaultersOpt func(defaulters *Defaulters)
+
+func NewDefaulters(clientRegistry ClientRegistry, writer filewriter.FileWriter, opts ...DefaultersOpt) *Defaulters {
+	defaulters := &Defaulters{
+		clientRegistry: clientRegistry,
+		writer:         writer,
+		keyGenerator:   common.SshAuthKeyGenerator{},
+		uuid:           uuid.New(), // In the future if we need a cluster wide uuid that is shared, we should move this call to the dependency factory for reuse.
+	}
+	for _, opt := range opts {
+		opt(defaulters)
+	}
+	return defaulters
+}
+
+func WithKeyGenerator(generator SshKeyGenerator) DefaultersOpt {
+	return func(defaulters *Defaulters) {
+		defaulters.keyGenerator = generator
 	}
 }
 
-func NewDefaultersFromAwsClientMap(awsClientMap AwsClientMap, writer filewriter.FileWriter, keyGenerator SshKeyGenerator) *Defaulters {
-	return &Defaulters{
-		awsClientMap: awsClientMap,
-		writer:       writer,
-		keyGenerator: keyGenerator,
+// WithUUID will set uuid generated outside of constructor.
+func WithUUID(uuid uuid.UUID) DefaultersOpt {
+	return func(defaulters *Defaulters) {
+		defaulters.uuid = uuid
 	}
 }
 
-func (d *Defaulters) GenerateDefaultSshKeys(ctx context.Context, machineConfigs map[string]*v1alpha1.SnowMachineConfig) error {
+// GenerateDefaultSSHKeys generates ssh key if it doesn't exist already.
+func (d *Defaulters) GenerateDefaultSSHKeys(ctx context.Context, machineConfigs map[string]*v1alpha1.SnowMachineConfig, clusterName string) error {
 	md := NewMachineConfigDefaulters(d)
 
 	for _, m := range machineConfigs {
-		if err := md.SetupDefaultSshKey(ctx, m); err != nil {
-			return err
+		if m.Spec.SshKeyName == "" {
+			if err := md.SetupDefaultSSHKey(ctx, m, clusterName); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -50,8 +69,8 @@ func (d *Defaulters) GenerateDefaultSshKeys(ctx context.Context, machineConfigs 
 }
 
 type MachineConfigDefaulters struct {
-	keyGenerated bool
-	defaulters   *Defaulters
+	sshKey     string
+	defaulters *Defaulters
 }
 
 func NewMachineConfigDefaulters(d *Defaulters) *MachineConfigDefaulters {
@@ -60,62 +79,67 @@ func NewMachineConfigDefaulters(d *Defaulters) *MachineConfigDefaulters {
 	}
 }
 
-func (md *MachineConfigDefaulters) defaultKeyCount(ctx context.Context) (int, error) {
-	var count int
-	for ip, client := range md.defaulters.awsClientMap {
-		keyExists, err := client.EC2KeyNameExists(ctx, defaultAwsSshKeyName)
+// SetupDefaultSSHKey creates and imports a default ssh key to snow devices listed in the snow machine config.
+// If not exist, a ssh auth key is generated locally first. Then we loop through the devices in the machine config,
+// and import the key to any device that does not have the key. In the end the default ssh key name is assigned to
+// the snow machine config.
+func (md *MachineConfigDefaulters) SetupDefaultSSHKey(ctx context.Context, m *v1alpha1.SnowMachineConfig, clusterName string) error {
+	defaultSSHKeyName := md.defaultSSHKeyName(clusterName)
+
+	clientMap, err := md.defaulters.clientRegistry.Get(ctx)
+	if err != nil {
+		return err
+	}
+
+	if len(md.sshKey) <= 0 {
+		logger.V(1).Info("SnowMachineConfig SshKey is empty. Creating default key pair", "default key name", defaultSSHKeyName)
+		md.sshKey, err = md.defaulters.keyGenerator.GenerateSSHAuthKey(md.defaulters.writer)
 		if err != nil {
-			return count, fmt.Errorf("describing key pair on snow device [deviceIP=%s]: %v", ip, err)
+			return err
 		}
+	}
+
+	for _, ip := range m.Spec.Devices {
+		client, ok := clientMap[ip]
+		if !ok {
+			return fmt.Errorf("credentials not found for device [%s]", ip)
+		}
+
+		keyExists, err := client.EC2KeyNameExists(ctx, defaultSSHKeyName)
+		if err != nil {
+			return fmt.Errorf("describing key pair on snow device [%s]: %v", ip, err)
+		}
+
 		if keyExists {
-			count += 1
+			continue
 		}
-	}
-	return count, nil
-}
 
-func (md *MachineConfigDefaulters) SetupDefaultSshKey(ctx context.Context, m *v1alpha1.SnowMachineConfig) error {
-	if m.Spec.SshKeyName != "" {
-		return nil
-	}
-
-	if md.keyGenerated {
-		m.Spec.SshKeyName = defaultAwsSshKeyName
-		return nil
-	}
-
-	keyCount, err := md.defaultKeyCount(ctx)
-	if err != nil {
-		return err
-	}
-
-	if keyCount > 0 && keyCount < len(md.defaulters.awsClientMap) {
-		return fmt.Errorf("default key [keyName=%s] only exists on some of the devices. Use 'aws ec2 import-key-pair' to import this key to all the devices", defaultAwsSshKeyName)
-	}
-
-	if keyCount == len(md.defaulters.awsClientMap) {
-		md.keyGenerated = true
-		m.Spec.SshKeyName = defaultAwsSshKeyName
-		return nil
-	}
-
-	logger.V(1).Info("SnowMachineConfig SshKey is empty. Creating default key pair", "default key name", defaultAwsSshKeyName)
-
-	key, err := md.defaulters.keyGenerator.GenerateSSHAuthKey(md.defaulters.writer)
-	if err != nil {
-		return err
-	}
-
-	for ip, client := range md.defaulters.awsClientMap {
-		err := client.EC2ImportKeyPair(ctx, defaultAwsSshKeyName, []byte(key))
-		if err != nil {
+		if err = client.EC2ImportKeyPair(ctx, defaultSSHKeyName, []byte(md.sshKey)); err != nil {
 			return fmt.Errorf("importing key pair on snow device [deviceIP=%s]: %v", ip, err)
 		}
 	}
 
-	md.keyGenerated = true
+	m.Spec.SshKeyName = defaultSSHKeyName
 
-	m.Spec.SshKeyName = defaultAwsSshKeyName
+	return nil
+}
+
+func (md *MachineConfigDefaulters) defaultSSHKeyName(clusterName string) string {
+	return fmt.Sprintf("%s-%s-%s", defaultAwsSshKeyName, clusterName, md.defaulters.uuid.String())
+}
+
+func SetupEksaCredentialsSecret(c *cluster.Config) error {
+	creds, err := aws.EncodeFileFromEnv(eksaSnowCredentialsFileKey)
+	if err != nil {
+		return fmt.Errorf("setting up snow credentials: %v", err)
+	}
+
+	certs, err := aws.EncodeFileFromEnv(eksaSnowCABundlesFileKey)
+	if err != nil {
+		return fmt.Errorf("setting up snow certificates: %v", err)
+	}
+
+	c.SnowCredentialsSecret = EksaCredentialsSecret(c.SnowDatacenter, []byte(creds), []byte(certs))
 
 	return nil
 }

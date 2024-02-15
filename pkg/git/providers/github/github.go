@@ -20,7 +20,7 @@ const (
 	EksaGithubTokenEnv = "EKSA_GITHUB_TOKEN"
 	GithubTokenEnv     = "GITHUB_TOKEN"
 	githubUrlTemplate  = "https://github.com/%v/%v.git"
-	patRegex           = "^[A-Za-z0-9_]{40}$"
+	patRegex           = "^ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}$"
 	repoPermissions    = "repo"
 )
 
@@ -85,7 +85,7 @@ func (g *githubProvider) AddDeployKeyToRepo(ctx context.Context, opts git.AddDep
 	return g.githubProviderClient.AddDeployKeyToRepo(ctx, opts)
 }
 
-// validates the github setup and access
+// validates the github setup and access.
 func (g *githubProvider) Validate(ctx context.Context) error {
 	user, err := g.githubProviderClient.AuthenticatedUser(ctx)
 	if err != nil {

@@ -22,10 +22,46 @@ spec:
           taints: []
 {{- end }}
           kubeletExtraArgs:
-            cgroup-driver: cgroupfs
             eviction-hard: nodefs.available<0%,nodefs.inodesFree<0%,imagefs.available<0%
 {{- if .kubeletExtraArgs }}
 {{ .kubeletExtraArgs.ToYaml | indent 12 }}
+{{- end }}
+{{- if .registryMirrorMap }}
+      files:
+{{- end }}
+{{- if .registryCACert }}
+      - content: |
+{{ .registryCACert | indent 10 }}
+        owner: root:root
+        path: "/etc/containerd/certs.d/{{ .mirrorBase }}/ca.crt"
+{{- end }}
+{{- if .registryMirrorMap }}
+      - content: |
+          [plugins."io.containerd.grpc.v1.cri".registry.mirrors]
+            {{- range $orig, $mirror := .registryMirrorMap }}
+            [plugins."io.containerd.grpc.v1.cri".registry.mirrors."{{ $orig }}"]
+              endpoint = ["https://{{ $mirror }}"]
+            {{- end }}
+            {{- if or .registryCACert .insecureSkip }}
+            [plugins."io.containerd.grpc.v1.cri".registry.configs."{{ .mirrorBase }}".tls]
+            {{- if .registryCACert }}
+              ca_file = "/etc/containerd/certs.d/{{ .mirrorBase }}/ca.crt"
+            {{- end }}
+            {{- if .insecureSkip }}
+              insecure_skip_verify = {{.insecureSkip}}
+            {{- end }}
+            {{- end }}
+            {{- if .registryAuth }}
+            [plugins."io.containerd.grpc.v1.cri".registry.configs."{{ .mirrorBase }}".auth]
+              username = "{{.registryUsername}}"
+              password = "{{.registryPassword}}"
+            {{- end }}
+        owner: root:root
+        path: "/etc/containerd/config_append.toml"
+      preKubeadmCommands:
+      - cat /etc/containerd/config_append.toml >> /etc/containerd/config.toml
+      - systemctl daemon-reload
+      - systemctl restart containerd
 {{- end }}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
@@ -33,6 +69,11 @@ kind: MachineDeployment
 metadata:
   name: {{.workerNodeGroupName}}
   namespace: {{.eksaSystemNamespace}}
+{{- if .autoscalingConfig }}
+  annotations:
+    cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: "{{ .autoscalingConfig.MinCount }}"
+    cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: "{{ .autoscalingConfig.MaxCount }}"
+{{- end }}
 spec:
   clusterName: {{.clusterName}}
   replicas: {{.workerReplicas}}
@@ -53,6 +94,12 @@ spec:
         name: {{.workloadTemplateName}}
         namespace: {{.eksaSystemNamespace}}
       version: {{.kubernetesVersion}}
+{{- if .upgradeRolloutStrategy }}
+  strategy:
+    rollingUpdate:
+      maxSurge: {{.maxSurge}}
+      maxUnavailable: {{.maxUnavailable}}
+{{- end }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: DockerMachineTemplate

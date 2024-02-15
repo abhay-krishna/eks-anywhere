@@ -24,7 +24,7 @@ type upgraderTest struct {
 
 func newUpgraderTest(t *testing.T) *upgraderTest {
 	kt := newKindnetdTest(t)
-	u := kindnetd.NewUpgrader(kt.client)
+	u := kindnetd.NewUpgrader(kt.client, kt.reader)
 	return &upgraderTest{
 		kindnetdTest: kt,
 		ctx:          context.Background(),
@@ -32,13 +32,13 @@ func newUpgraderTest(t *testing.T) *upgraderTest {
 		manifest:     []byte(test.ReadFile(t, "testdata/expected_kindnetd_manifest.yaml")),
 		currentSpec: test.NewClusterSpec(func(s *cluster.Spec) {
 			s.Cluster.Spec.ClusterNetwork.Pods.CidrBlocks = []string{"192.168.1.0/24"}
-			s.VersionsBundle.Kindnetd = *KindnetdBundle.DeepCopy()
-			s.VersionsBundle.Kindnetd.Version = "v1.9.10-eksa.1"
+			s.VersionsBundles["1.19"].Kindnetd = *kindnetdBundle.DeepCopy()
+			s.VersionsBundles["1.19"].Kindnetd.Version = "v1.9.10-eksa.1"
 		}),
 		newSpec: test.NewClusterSpec(func(s *cluster.Spec) {
 			s.Cluster.Spec.ClusterNetwork.Pods.CidrBlocks = []string{"192.168.1.0/24"}
-			s.VersionsBundle.Kindnetd = *KindnetdBundle.DeepCopy()
-			s.VersionsBundle.Kindnetd.Version = "v1.9.11-eksa.1"
+			s.VersionsBundles["1.19"].Kindnetd = *kindnetdBundle.DeepCopy()
+			s.VersionsBundles["1.19"].Kindnetd.Version = "v1.9.11-eksa.1"
 		}),
 		cluster: &types.Cluster{
 			KubeconfigFile: "kubeconfig",
@@ -60,8 +60,13 @@ func TestUpgraderUpgradeSuccess(t *testing.T) {
 
 func TestUpgraderUpgradeNotNeeded(t *testing.T) {
 	tt := newUpgraderTest(t)
-	tt.currentSpec.VersionsBundle.Kindnetd.Version = "v1.0.0"
-	tt.newSpec.VersionsBundle.Kindnetd.Version = "v1.0.0"
+	tt.currentSpec.VersionsBundles["1.19"].Kindnetd.Version = "v1.0.0"
+	tt.newSpec.VersionsBundles["1.19"].Kindnetd.Version = "v1.0.0"
 
 	tt.Expect(tt.u.Upgrade(tt.ctx, tt.cluster, tt.currentSpec, tt.newSpec, []string{})).To(BeNil(), "upgrader.Upgrade() should succeed and return nil ChangeDiff")
+}
+
+func TestUpgraderdRunPostControlPlaneUpgradeSetup(t *testing.T) {
+	tt := newUpgraderTest(t)
+	tt.Expect(tt.u.RunPostControlPlaneUpgradeSetup(context.Background(), nil)).To(Succeed())
 }

@@ -2,48 +2,54 @@ package api
 
 import (
 	"fmt"
-	"io/ioutil"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/yaml"
 
 	anywherev1 "github.com/aws/eks-anywhere/pkg/api/v1alpha1"
+	"github.com/aws/eks-anywhere/pkg/cluster"
 	"github.com/aws/eks-anywhere/pkg/logger"
 	"github.com/aws/eks-anywhere/pkg/providers"
+	"github.com/aws/eks-anywhere/pkg/utils/ptr"
 )
 
 type ClusterFiller func(c *anywherev1.Cluster)
 
-func AutoFillClusterFromFile(filename string, fillers ...ClusterFiller) ([]byte, error) {
-	content, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return nil, fmt.Errorf("unable to read file due to: %v", err)
+// ClusterToConfigFiller updates the Cluster in the cluster.Config by applying all the fillers.
+func ClusterToConfigFiller(fillers ...ClusterFiller) ClusterConfigFiller {
+	return func(c *cluster.Config) {
+		for _, f := range fillers {
+			f(c.Cluster)
+		}
 	}
-
-	return AutoFillClusterFromYaml(content, fillers...)
 }
 
-func AutoFillClusterFromYaml(yamlContent []byte, fillers ...ClusterFiller) ([]byte, error) {
-	clusterConfig, err := anywherev1.GetClusterConfigFromContent(yamlContent)
-	if err != nil {
-		return nil, fmt.Errorf("unable to get cluster config from content: %v", err)
+// JoinClusterConfigFillers creates one single ClusterConfigFiller from a collection of fillers.
+func JoinClusterConfigFillers(fillers ...ClusterConfigFiller) ClusterConfigFiller {
+	return func(c *cluster.Config) {
+		for _, f := range fillers {
+			f(c)
+		}
 	}
-
-	for _, f := range fillers {
-		f(clusterConfig)
-	}
-
-	clusterOutput, err := yaml.Marshal(clusterConfig)
-	if err != nil {
-		return nil, fmt.Errorf("marshalling cluster config: %v", err)
-	}
-
-	return clusterOutput, nil
 }
 
 func WithKubernetesVersion(v anywherev1.KubernetesVersion) ClusterFiller {
 	return func(c *anywherev1.Cluster) {
 		c.Spec.KubernetesVersion = v
+	}
+}
+
+// WithBundlesRef sets BundlesRef with the provided name to use.
+func WithBundlesRef(name string, namespace string, apiVersion string) ClusterFiller {
+	return func(c *anywherev1.Cluster) {
+		c.Spec.BundlesRef = &anywherev1.BundlesRef{Name: name, Namespace: namespace, APIVersion: apiVersion}
+	}
+}
+
+// WithEksaVersion sets EksaVersion with the provided name to use.
+func WithEksaVersion(eksaVersion *anywherev1.EksaVersion) ClusterFiller {
+	return func(c *anywherev1.Cluster) {
+		c.Spec.EksaVersion = eksaVersion
 	}
 }
 
@@ -53,6 +59,37 @@ func WithCiliumPolicyEnforcementMode(mode anywherev1.CiliumPolicyEnforcementMode
 			c.Spec.ClusterNetwork.CNIConfig = &anywherev1.CNIConfig{Cilium: &anywherev1.CiliumConfig{}}
 		}
 		c.Spec.ClusterNetwork.CNIConfig.Cilium.PolicyEnforcementMode = mode
+	}
+}
+
+// WithCiliumEgressMasqueradeInterfaces sets the egressMasqueradeInterfaces with the provided interface option to use.
+func WithCiliumEgressMasqueradeInterfaces(interfaceName string) ClusterFiller {
+	return func(c *anywherev1.Cluster) {
+		if c.Spec.ClusterNetwork.CNIConfig == nil {
+			c.Spec.ClusterNetwork.CNIConfig = &anywherev1.CNIConfig{Cilium: &anywherev1.CiliumConfig{}}
+		}
+		c.Spec.ClusterNetwork.CNIConfig.Cilium.EgressMasqueradeInterfaces = interfaceName
+	}
+}
+
+// WithCiliumSkipUpgrade enables skip upgrade for EKSA Cilium installations.
+func WithCiliumSkipUpgrade() ClusterFiller {
+	return func(c *anywherev1.Cluster) {
+		network := c.Spec.ClusterNetwork
+		if network.CNIConfig != nil && network.CNIConfig.Cilium != nil {
+			fmt.Println("Enable ciliun skip upgrade")
+			network.CNIConfig.Cilium.SkipUpgrade = ptr.Bool(true)
+		}
+	}
+}
+
+// WithCiliumRoutingMode sets the tunnel mode with the provided mode option to use.
+func WithCiliumRoutingMode(mode anywherev1.CiliumRoutingMode) ClusterFiller {
+	return func(c *anywherev1.Cluster) {
+		if c.Spec.ClusterNetwork.CNIConfig == nil {
+			c.Spec.ClusterNetwork.CNIConfig = &anywherev1.CNIConfig{Cilium: &anywherev1.CiliumConfig{}}
+		}
+		c.Spec.ClusterNetwork.CNIConfig.Cilium.RoutingMode = mode
 	}
 }
 
@@ -89,9 +126,10 @@ func WithControlPlaneLabel(key string, val string) ClusterFiller {
 	}
 }
 
+// WithPodCidr sets an explicit pod CIDR, overriding the provider's default.
 func WithPodCidr(podCidr string) ClusterFiller {
 	return func(c *anywherev1.Cluster) {
-		c.Spec.ClusterNetwork.Pods.CidrBlocks = []string{podCidr}
+		c.Spec.ClusterNetwork.Pods.CidrBlocks = strings.Split(podCidr, ",")
 	}
 }
 
@@ -101,12 +139,52 @@ func WithServiceCidr(svcCidr string) ClusterFiller {
 	}
 }
 
+// WithWorkerKubernetesVersion sets the kubernetes version field for the given worker group.
+func WithWorkerKubernetesVersion(name string, version *anywherev1.KubernetesVersion) ClusterFiller {
+	return func(c *anywherev1.Cluster) {
+		pos := -1
+		for i, wng := range c.Spec.WorkerNodeGroupConfigurations {
+			if wng.Name == name {
+				wng.KubernetesVersion = version
+				pos = i
+				c.Spec.WorkerNodeGroupConfigurations[pos] = wng
+				break
+			}
+		}
+		// Append the worker node group if not already found in existing configuration
+		if pos == -1 {
+			c.Spec.WorkerNodeGroupConfigurations = append(c.Spec.WorkerNodeGroupConfigurations, workerNodeWithKubernetesVersion(name, version))
+		}
+	}
+}
+
+func workerNodeWithKubernetesVersion(name string, version *anywherev1.KubernetesVersion) anywherev1.WorkerNodeGroupConfiguration {
+	return anywherev1.WorkerNodeGroupConfiguration{
+		Name:              name,
+		Count:             ptr.Int(1),
+		KubernetesVersion: version,
+	}
+}
+
 func WithWorkerNodeCount(r int) ClusterFiller {
 	return func(c *anywherev1.Cluster) {
 		if len(c.Spec.WorkerNodeGroupConfigurations) == 0 {
-			c.Spec.WorkerNodeGroupConfigurations = []anywherev1.WorkerNodeGroupConfiguration{{Count: 0}}
+			c.Spec.WorkerNodeGroupConfigurations = []anywherev1.WorkerNodeGroupConfiguration{{Count: ptr.Int(0)}}
 		}
-		c.Spec.WorkerNodeGroupConfigurations[0].Count = r
+		c.Spec.WorkerNodeGroupConfigurations[0].Count = &r
+	}
+}
+
+// WithWorkerNodeAutoScalingConfig adds an autoscaling configuration with a given min and max count.
+func WithWorkerNodeAutoScalingConfig(min int, max int) ClusterFiller {
+	return func(c *anywherev1.Cluster) {
+		if len(c.Spec.WorkerNodeGroupConfigurations) == 0 {
+			c.Spec.WorkerNodeGroupConfigurations = []anywherev1.WorkerNodeGroupConfiguration{{Count: ptr.Int(min)}}
+		}
+		c.Spec.WorkerNodeGroupConfigurations[0].AutoScalingConfiguration = &anywherev1.AutoScalingConfiguration{
+			MinCount: min,
+			MaxCount: max,
+		}
 	}
 }
 
@@ -172,13 +250,17 @@ func WithProxyConfig(httpProxy, httpsProxy string, noProxy []string) ClusterFill
 	}
 }
 
-func WithRegistryMirror(endpoint, caCert string) ClusterFiller {
+// WithRegistryMirror adds a registry mirror configuration.
+func WithRegistryMirror(endpoint, port string, caCert string, authenticate bool, insecureSkipVerify bool) ClusterFiller {
 	return func(c *anywherev1.Cluster) {
 		if c.Spec.RegistryMirrorConfiguration == nil {
 			c.Spec.RegistryMirrorConfiguration = &anywherev1.RegistryMirrorConfiguration{}
 		}
 		c.Spec.RegistryMirrorConfiguration.Endpoint = endpoint
+		c.Spec.RegistryMirrorConfiguration.Port = port
 		c.Spec.RegistryMirrorConfiguration.CACertContent = caCert
+		c.Spec.RegistryMirrorConfiguration.Authenticate = authenticate
+		c.Spec.RegistryMirrorConfiguration.InsecureSkipVerify = insecureSkipVerify
 	}
 }
 
@@ -239,5 +321,45 @@ func WithWorkerNodeGroup(name string, fillers ...WorkerNodeGroupFiller) ClusterF
 
 		FillWorkerNodeGroup(nodeGroup, fillers...)
 		c.Spec.WorkerNodeGroupConfigurations[position] = *nodeGroup
+	}
+}
+
+// WithPodIamFiller configures pod IAM config to enable IRSA.
+func WithPodIamFiller(issuerURL string) ClusterFiller {
+	return func(c *anywherev1.Cluster) {
+		c.Spec.PodIAMConfig = &anywherev1.PodIAMConfig{
+			ServiceAccountIssuer: issuerURL,
+		}
+	}
+}
+
+// WithEtcdEncryptionFiller configures EtcdEncyption on the cluster.
+func WithEtcdEncryptionFiller(kms *anywherev1.KMS, resources []string) ClusterFiller {
+	return func(c *anywherev1.Cluster) {
+		c.Spec.EtcdEncryption = &[]anywherev1.EtcdEncryption{
+			{
+				Providers: []anywherev1.EtcdEncryptionProvider{
+					{
+						KMS: kms,
+					},
+				},
+				Resources: resources,
+			},
+		}
+	}
+}
+
+// WithInPlaceUpgradeStrategy configures the UpgradeStrategy on Control-plane and Worker node groups to InPlace.
+func WithInPlaceUpgradeStrategy() ClusterFiller {
+	return func(c *anywherev1.Cluster) {
+		c.Spec.ControlPlaneConfiguration.UpgradeRolloutStrategy = &anywherev1.ControlPlaneUpgradeRolloutStrategy{
+			Type: anywherev1.InPlaceStrategyType,
+		}
+		for idx, wng := range c.Spec.WorkerNodeGroupConfigurations {
+			wng.UpgradeRolloutStrategy = &anywherev1.WorkerNodesUpgradeRolloutStrategy{
+				Type: anywherev1.InPlaceStrategyType,
+			}
+			c.Spec.WorkerNodeGroupConfigurations[idx] = wng
+		}
 	}
 }

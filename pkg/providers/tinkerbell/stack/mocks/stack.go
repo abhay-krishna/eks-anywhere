@@ -8,6 +8,7 @@ import (
 	context "context"
 	reflect "reflect"
 
+	helm "github.com/aws/eks-anywhere/pkg/helm"
 	stack "github.com/aws/eks-anywhere/pkg/providers/tinkerbell/stack"
 	v1alpha1 "github.com/aws/eks-anywhere/release/api/v1alpha1"
 	gomock "github.com/golang/mock/gomock"
@@ -121,6 +122,39 @@ func (mr *MockHelmMockRecorder) InstallChartWithValuesFile(ctx, chart, ociURI, v
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstallChartWithValuesFile", reflect.TypeOf((*MockHelm)(nil).InstallChartWithValuesFile), ctx, chart, ociURI, version, kubeconfigFilePath, valuesFilePath)
 }
 
+// RegistryLogin mocks base method.
+func (m *MockHelm) RegistryLogin(ctx context.Context, endpoint, username, password string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RegistryLogin", ctx, endpoint, username, password)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RegistryLogin indicates an expected call of RegistryLogin.
+func (mr *MockHelmMockRecorder) RegistryLogin(ctx, endpoint, username, password interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RegistryLogin", reflect.TypeOf((*MockHelm)(nil).RegistryLogin), ctx, endpoint, username, password)
+}
+
+// UpgradeChartWithValuesFile mocks base method.
+func (m *MockHelm) UpgradeChartWithValuesFile(ctx context.Context, chart, ociURI, version, kubeconfigFilePath, valuesFilePath string, opts ...helm.Opt) error {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx, chart, ociURI, version, kubeconfigFilePath, valuesFilePath}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "UpgradeChartWithValuesFile", varargs...)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpgradeChartWithValuesFile indicates an expected call of UpgradeChartWithValuesFile.
+func (mr *MockHelmMockRecorder) UpgradeChartWithValuesFile(ctx, chart, ociURI, version, kubeconfigFilePath, valuesFilePath interface{}, opts ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx, chart, ociURI, version, kubeconfigFilePath, valuesFilePath}, opts...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpgradeChartWithValuesFile", reflect.TypeOf((*MockHelm)(nil).UpgradeChartWithValuesFile), varargs...)
+}
+
 // MockStackInstaller is a mock of StackInstaller interface.
 type MockStackInstaller struct {
 	ctrl     *gomock.Controller
@@ -144,6 +178,18 @@ func (m *MockStackInstaller) EXPECT() *MockStackInstallerMockRecorder {
 	return m.recorder
 }
 
+// AddNoProxyIP mocks base method.
+func (m *MockStackInstaller) AddNoProxyIP(IP string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "AddNoProxyIP", IP)
+}
+
+// AddNoProxyIP indicates an expected call of AddNoProxyIP.
+func (mr *MockStackInstallerMockRecorder) AddNoProxyIP(IP interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddNoProxyIP", reflect.TypeOf((*MockStackInstaller)(nil).AddNoProxyIP), IP)
+}
+
 // CleanupLocalBoots mocks base method.
 func (m *MockStackInstaller) CleanupLocalBoots(ctx context.Context, forceCleanup bool) error {
 	m.ctrl.T.Helper()
@@ -156,6 +202,20 @@ func (m *MockStackInstaller) CleanupLocalBoots(ctx context.Context, forceCleanup
 func (mr *MockStackInstallerMockRecorder) CleanupLocalBoots(ctx, forceCleanup interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CleanupLocalBoots", reflect.TypeOf((*MockStackInstaller)(nil).CleanupLocalBoots), ctx, forceCleanup)
+}
+
+// GetNamespace mocks base method.
+func (m *MockStackInstaller) GetNamespace() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetNamespace")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetNamespace indicates an expected call of GetNamespace.
+func (mr *MockStackInstallerMockRecorder) GetNamespace() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNamespace", reflect.TypeOf((*MockStackInstaller)(nil).GetNamespace))
 }
 
 // Install mocks base method.
@@ -189,4 +249,23 @@ func (m *MockStackInstaller) UninstallLocal(ctx context.Context) error {
 func (mr *MockStackInstallerMockRecorder) UninstallLocal(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UninstallLocal", reflect.TypeOf((*MockStackInstaller)(nil).UninstallLocal), ctx)
+}
+
+// Upgrade mocks base method.
+func (m *MockStackInstaller) Upgrade(arg0 context.Context, arg1 v1alpha1.TinkerbellBundle, tinkerbellIP, kubeconfig, hookOverride string, opts ...stack.InstallOption) error {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1, tinkerbellIP, kubeconfig, hookOverride}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "Upgrade", varargs...)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Upgrade indicates an expected call of Upgrade.
+func (mr *MockStackInstallerMockRecorder) Upgrade(arg0, arg1, tinkerbellIP, kubeconfig, hookOverride interface{}, opts ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1, tinkerbellIP, kubeconfig, hookOverride}, opts...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Upgrade", reflect.TypeOf((*MockStackInstaller)(nil).Upgrade), varargs...)
 }

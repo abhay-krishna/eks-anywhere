@@ -13,14 +13,14 @@ import (
 	"github.com/aws/eks-anywhere/pkg/constants"
 )
 
-// KubeClient is a kubernetes API client
+// KubeClient is a kubernetes API client.
 type KubeClient interface {
 	Get(ctx context.Context, name, namespace string, obj kubernetes.Object) error
 }
 
 func MachineDeploymentInCluster(ctx context.Context, kubeclient KubeClient, clusterSpec *cluster.Spec, workerNodeGroupConfig v1alpha1.WorkerNodeGroupConfiguration) (*clusterv1.MachineDeployment, error) {
 	md := &clusterv1.MachineDeployment{}
-	err := kubeclient.Get(ctx, MachineDeploymentName(clusterSpec, workerNodeGroupConfig), constants.EksaSystemNamespace, md)
+	err := kubeclient.Get(ctx, MachineDeploymentName(clusterSpec.Cluster, workerNodeGroupConfig), constants.EksaSystemNamespace, md)
 	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}

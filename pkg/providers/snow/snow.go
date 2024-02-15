@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/bootstrapper"
@@ -14,7 +17,6 @@ import (
 	"github.com/aws/eks-anywhere/pkg/cluster"
 	"github.com/aws/eks-anywhere/pkg/constants"
 	"github.com/aws/eks-anywhere/pkg/logger"
-	"github.com/aws/eks-anywhere/pkg/networkutils"
 	"github.com/aws/eks-anywhere/pkg/providers"
 	providerValidator "github.com/aws/eks-anywhere/pkg/providers/validator"
 	"github.com/aws/eks-anywhere/pkg/retrier"
@@ -40,14 +42,15 @@ var (
 type SnowProvider struct {
 	kubeUnAuthClient KubeUnAuthClient
 	retrier          *retrier.Retrier
-	bootstrapCreds   bootstrapCreds
 	configManager    *ConfigManager
+	ipValidator      *providerValidator.IPValidator
 	skipIpCheck      bool
+	log              logr.Logger
 }
 
 type KubeUnAuthClient interface {
 	KubeconfigClient(kubeconfig string) kubernetes.Client
-	Delete(ctx context.Context, name, namespace, kubeconfig string, obj runtime.Object) error
+	Apply(ctx context.Context, kubeconfig string, obj runtime.Object) error
 }
 
 func NewProvider(kubeUnAuthClient KubeUnAuthClient, configManager *ConfigManager, skipIpCheck bool) *SnowProvider {
@@ -56,7 +59,9 @@ func NewProvider(kubeUnAuthClient KubeUnAuthClient, configManager *ConfigManager
 		kubeUnAuthClient: kubeUnAuthClient,
 		retrier:          retrier,
 		configManager:    configManager,
+		ipValidator:      providerValidator.NewIPValidator(),
 		skipIpCheck:      skipIpCheck,
+		log:              logger.Get(),
 	}
 }
 
@@ -65,14 +70,11 @@ func (p *SnowProvider) Name() string {
 }
 
 func (p *SnowProvider) SetupAndValidateCreateCluster(ctx context.Context, clusterSpec *cluster.Spec) error {
-	if err := p.setupBootstrapCreds(); err != nil {
-		return fmt.Errorf("setting up credentials: %v", err)
-	}
 	if err := p.configManager.SetDefaultsAndValidate(ctx, clusterSpec.Config); err != nil {
 		return fmt.Errorf("setting defaults and validate snow config: %v", err)
 	}
 	if !p.skipIpCheck {
-		if err := providerValidator.ValidateControlPlaneIpUniqueness(clusterSpec.Cluster, &networkutils.DefaultNetClient{}); err != nil {
+		if err := p.ipValidator.ValidateControlPlaneIPUniqueness(clusterSpec.Cluster); err != nil {
 			return err
 		}
 	} else {
@@ -81,44 +83,50 @@ func (p *SnowProvider) SetupAndValidateCreateCluster(ctx context.Context, cluste
 	return nil
 }
 
-func (p *SnowProvider) SetupAndValidateUpgradeCluster(ctx context.Context, cluster *types.Cluster, clusterSpec *cluster.Spec) error {
-	if err := p.setupBootstrapCreds(); err != nil {
-		return fmt.Errorf("setting up credentials: %v", err)
-	}
+func (p *SnowProvider) SetupAndValidateUpgradeCluster(ctx context.Context, cluster *types.Cluster, clusterSpec *cluster.Spec, _ *cluster.Spec) error {
 	if err := p.configManager.SetDefaultsAndValidate(ctx, clusterSpec.Config); err != nil {
 		return fmt.Errorf("setting defaults and validate snow config: %v", err)
 	}
 	return nil
 }
 
-func (p *SnowProvider) SetupAndValidateDeleteCluster(ctx context.Context, _ *types.Cluster) error {
-	if err := p.setupBootstrapCreds(); err != nil {
+// SetupAndValidateUpgradeManagementComponents performs necessary setup for upgrade management components operation.
+func (p *SnowProvider) SetupAndValidateUpgradeManagementComponents(_ context.Context, _ *cluster.Spec) error {
+	return nil
+}
+
+func (p *SnowProvider) SetupAndValidateDeleteCluster(ctx context.Context, _ *types.Cluster, clusterSpec *cluster.Spec) error {
+	if err := SetupEksaCredentialsSecret(clusterSpec.Config); err != nil {
 		return fmt.Errorf("setting up credentials: %v", err)
 	}
 	return nil
 }
 
-func (p *SnowProvider) UpdateSecrets(ctx context.Context, cluster *types.Cluster) error {
+func (p *SnowProvider) UpdateSecrets(ctx context.Context, cluster *types.Cluster, clusterSpec *cluster.Spec) error {
+	if err := p.kubeUnAuthClient.Apply(ctx, cluster.KubeconfigFile, clusterSpec.SnowCredentialsSecret); err != nil {
+		return fmt.Errorf("applying eks-a snow credentials secret in cluster: %v", err)
+	}
 	return nil
 }
 
-func CAPIObjects(ctx context.Context, clusterSpec *cluster.Spec, kubeClient kubernetes.Client) (controlPlaneSpec, workersSpec []byte, err error) {
-	controlPlaneObjs, err := ControlPlaneObjects(ctx, clusterSpec, kubeClient)
+// CAPIObjects generates the control plane and worker nodes objects for snow provider from clusterSpec.
+func CAPIObjects(ctx context.Context, log logr.Logger, clusterSpec *cluster.Spec, kubeClient kubernetes.Client) (controlPlaneSpec, workersSpec []byte, err error) {
+	controlPlaneObjs, err := ControlPlaneObjects(ctx, log, clusterSpec, kubeClient)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	controlPlaneSpec, err = templater.ObjectsToYaml(controlPlaneObjs...)
+	controlPlaneSpec, err = templater.ObjectsToYaml(kubernetesToRuntimeObjects(controlPlaneObjs)...)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	workersObjs, err := WorkersObjects(ctx, clusterSpec, kubeClient)
+	workersObjs, err := WorkersObjects(ctx, log, clusterSpec, kubeClient)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	workersSpec, err = templater.ObjectsToYaml(workersObjs...)
+	workersSpec, err = templater.ObjectsToYaml(kubernetesToRuntimeObjects(workersObjs)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -126,9 +134,18 @@ func CAPIObjects(ctx context.Context, clusterSpec *cluster.Spec, kubeClient kube
 	return controlPlaneSpec, workersSpec, nil
 }
 
+func kubernetesToRuntimeObjects(objs []kubernetes.Object) []runtime.Object {
+	runtimeObjs := make([]runtime.Object, 0, len(objs))
+	for _, o := range objs {
+		runtimeObjs = append(runtimeObjs, o)
+	}
+
+	return runtimeObjs
+}
+
 func (p *SnowProvider) generateCAPISpec(ctx context.Context, cluster *types.Cluster, clusterSpec *cluster.Spec) (controlPlaneSpec, workersSpec []byte, err error) {
 	kubeconfigClient := p.kubeUnAuthClient.KubeconfigClient(cluster.KubeconfigFile)
-	return CAPIObjects(ctx, clusterSpec, kubeconfigClient)
+	return CAPIObjects(ctx, p.log, clusterSpec, kubeconfigClient)
 }
 
 func (p *SnowProvider) GenerateCAPISpecForCreate(ctx context.Context, cluster *types.Cluster, clusterSpec *cluster.Spec) (controlPlaneSpec, workersSpec []byte, err error) {
@@ -139,15 +156,16 @@ func (p *SnowProvider) GenerateCAPISpecForUpgrade(ctx context.Context, bootstrap
 	return p.generateCAPISpec(ctx, bootstrapCluster, clusterSpec)
 }
 
-func (p *SnowProvider) GenerateStorageClass() []byte {
-	return nil
-}
-
 func (p *SnowProvider) PreCAPIInstallOnBootstrap(ctx context.Context, cluster *types.Cluster, clusterSpec *cluster.Spec) error {
 	return nil
 }
 
 func (p *SnowProvider) PostBootstrapSetup(ctx context.Context, clusterConfig *v1alpha1.Cluster, cluster *types.Cluster) error {
+	return nil
+}
+
+// PostBootstrapDeleteForUpgrade runs any provider-specific operations after bootstrap cluster has been deleted.
+func (p *SnowProvider) PostBootstrapDeleteForUpgrade(ctx context.Context, cluster *types.Cluster) error {
 	return nil
 }
 
@@ -159,7 +177,7 @@ func (p *SnowProvider) PostWorkloadInit(ctx context.Context, cluster *types.Clus
 	return nil
 }
 
-func (p *SnowProvider) BootstrapClusterOpts() ([]bootstrapper.BootstrapClusterOption, error) {
+func (p *SnowProvider) BootstrapClusterOpts(_ *cluster.Spec) ([]bootstrapper.BootstrapClusterOption, error) {
 	return nil, nil
 }
 
@@ -167,35 +185,37 @@ func (p *SnowProvider) UpdateKubeConfig(content *[]byte, clusterName string) err
 	return nil
 }
 
-func (p *SnowProvider) Version(clusterSpec *cluster.Spec) string {
-	return clusterSpec.VersionsBundle.Snow.Version
+// Version returns the snow version from the management components.
+func (p *SnowProvider) Version(components *cluster.ManagementComponents) string {
+	return components.Snow.Version
 }
 
-func (p *SnowProvider) EnvMap(clusterSpec *cluster.Spec) (map[string]string, error) {
+// EnvMap returns the environment variables for the snow provider.
+func (p *SnowProvider) EnvMap(managementComponents *cluster.ManagementComponents, clusterSpec *cluster.Spec) (map[string]string, error) {
 	envMap := make(map[string]string)
-	envMap[snowCredentialsKey] = p.bootstrapCreds.snowCredsB64
-	envMap[snowCertsKey] = p.bootstrapCreds.snowCertsB64
+	envMap[snowCredentialsKey] = string(clusterSpec.SnowCredentialsSecret.Data[v1alpha1.SnowCredentialsKey])
+	envMap[snowCertsKey] = string(clusterSpec.SnowCredentialsSecret.Data[v1alpha1.SnowCertificatesKey])
 
-	envMap["SNOW_CONTROLLER_IMAGE"] = clusterSpec.VersionsBundle.Snow.Manager.VersionedImage()
+	envMap["SNOW_CONTROLLER_IMAGE"] = managementComponents.Snow.Manager.VersionedImage()
 
 	return envMap, nil
 }
 
 func (p *SnowProvider) GetDeployments() map[string][]string {
 	return map[string][]string{
-		"capas-system": {"capas-controller-manager"},
+		constants.CapasSystemNamespace: {"capas-controller-manager"},
 	}
 }
 
-func (p *SnowProvider) GetInfrastructureBundle(clusterSpec *cluster.Spec) *types.InfrastructureBundle {
-	bundle := clusterSpec.VersionsBundle
-	folderName := fmt.Sprintf("infrastructure-snow/%s/", bundle.Snow.Version)
+// GetInfrastructureBundle returns the infrastructure bundle from the management components.
+func (p *SnowProvider) GetInfrastructureBundle(components *cluster.ManagementComponents) *types.InfrastructureBundle {
+	folderName := fmt.Sprintf("infrastructure-snow/%s/", components.Snow.Version)
 
 	infraBundle := types.InfrastructureBundle{
 		FolderName: folderName,
 		Manifests: []releasev1alpha1.Manifest{
-			bundle.Snow.Components,
-			bundle.Snow.Metadata,
+			components.Snow.Components,
+			components.Snow.Metadata,
 		},
 	}
 	return &infraBundle
@@ -225,12 +245,17 @@ func (p *SnowProvider) ValidateNewSpec(ctx context.Context, cluster *types.Clust
 	return nil
 }
 
-func (p *SnowProvider) GenerateMHC(clusterSpec *cluster.Spec) ([]byte, error) {
-	return templater.ObjectsToYaml(MachineHealthCheckObjects(clusterSpec)...)
-}
+// ChangeDiff returns the change diff from the management components.
+func (p *SnowProvider) ChangeDiff(currentComponents, newComponents *cluster.ManagementComponents) *types.ComponentChangeDiff {
+	if currentComponents.Snow.Version == newComponents.Snow.Version {
+		return nil
+	}
 
-func (p *SnowProvider) ChangeDiff(currentSpec, newSpec *cluster.Spec) *types.ComponentChangeDiff {
-	return nil
+	return &types.ComponentChangeDiff{
+		ComponentName: constants.SnowProviderName,
+		NewVersion:    newComponents.Snow.Version,
+		OldVersion:    currentComponents.Snow.Version,
+	}
 }
 
 func (p *SnowProvider) RunPostControlPlaneUpgrade(ctx context.Context, oldClusterSpec *cluster.Spec, clusterSpec *cluster.Spec, workloadCluster *types.Cluster, managementCluster *types.Cluster) error {
@@ -241,33 +266,89 @@ func bundleImagesEqual(new, old releasev1alpha1.SnowBundle) bool {
 	return new.Manager.ImageDigest == old.Manager.ImageDigest && new.KubeVip.ImageDigest == old.KubeVip.ImageDigest
 }
 
-func machineConfigsEqual(new, old map[string]*v1alpha1.SnowMachineConfig) bool {
-	if len(new) != len(old) {
-		return false
-	}
+func (p *SnowProvider) machineConfigsChanged(ctx context.Context, cluster *types.Cluster, spec *cluster.Spec) (bool, error) {
+	client := p.kubeUnAuthClient.KubeconfigClient(cluster.KubeconfigFile)
 
-	for name, newConfig := range new {
-		oldConfig, ok := old[name]
-		if !ok || !equality.Semantic.DeepDerivative(newConfig.Spec, oldConfig.Spec) {
-			return false
+	for _, new := range spec.SnowMachineConfigs {
+		old := &v1alpha1.SnowMachineConfig{}
+		err := client.Get(ctx, new.Name, namespaceOrDefault(new), old)
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+
+		if len(new.Spec.Devices) != len(old.Spec.Devices) || !equality.Semantic.DeepDerivative(new.Spec, old.Spec) {
+			return true, nil
 		}
 	}
 
-	return true
+	return false, nil
 }
 
-func (p *SnowProvider) UpgradeNeeded(ctx context.Context, newSpec, oldSpec *cluster.Spec, _ *types.Cluster) (bool, error) {
-	return !bundleImagesEqual(newSpec.VersionsBundle.Snow, oldSpec.VersionsBundle.Snow) ||
-		!machineConfigsEqual(newSpec.SnowMachineConfigs, oldSpec.SnowMachineConfigs), nil
+func (p *SnowProvider) datacenterChanged(ctx context.Context, cluster *types.Cluster, spec *cluster.Spec) (bool, error) {
+	client := p.kubeUnAuthClient.KubeconfigClient(cluster.KubeconfigFile)
+	new := spec.SnowDatacenter
+	old := &v1alpha1.SnowDatacenterConfig{}
+	err := client.Get(ctx, new.Name, namespaceOrDefault(new), old)
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	return !equality.Semantic.DeepDerivative(new.Spec, old.Spec), nil
+}
+
+// namespaceOrDefault return the object namespace or default if it's empty.
+func namespaceOrDefault(obj client.Object) string {
+	ns := obj.GetNamespace()
+	if ns == "" {
+		ns = "default"
+	}
+
+	return ns
+}
+
+// UpgradeNeeded compares the new snow version bundle and objects with the existing ones in the cluster and decides whether
+// to trigger a cluster upgrade or not.
+// TODO: revert the change once cluster.BuildSpec is used in cluster_manager to replace the deprecated cluster.BuildSpecForCluster
+func (p *SnowProvider) UpgradeNeeded(ctx context.Context, newSpec, oldSpec *cluster.Spec, c *types.Cluster) (bool, error) {
+	oldVersionBundle := oldSpec.RootVersionsBundle()
+	newVersionsBundle := newSpec.RootVersionsBundle()
+	if !bundleImagesEqual(newVersionsBundle.Snow, oldVersionBundle.Snow) {
+		return true, nil
+	}
+
+	datacenterChanged, err := p.datacenterChanged(ctx, c, newSpec)
+	if err != nil {
+		return false, err
+	}
+	if datacenterChanged {
+		return true, nil
+	}
+
+	return p.machineConfigsChanged(ctx, c, newSpec)
 }
 
 func (p *SnowProvider) DeleteResources(ctx context.Context, clusterSpec *cluster.Spec) error {
+	client := p.kubeUnAuthClient.KubeconfigClient(clusterSpec.ManagementCluster.KubeconfigFile)
+
 	for _, mc := range clusterSpec.SnowMachineConfigs {
-		if err := p.kubeUnAuthClient.Delete(ctx, mc.Name, mc.Namespace, clusterSpec.ManagementCluster.KubeconfigFile, mc); err != nil {
+		mc.Namespace = namespaceOrDefault(mc)
+		if err := client.Delete(ctx, mc); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 	}
-	return p.kubeUnAuthClient.Delete(ctx, clusterSpec.SnowDatacenter.GetName(), clusterSpec.SnowDatacenter.GetNamespace(), clusterSpec.ManagementCluster.KubeconfigFile, clusterSpec.SnowDatacenter)
+
+	clusterSpec.SnowDatacenter.Namespace = namespaceOrDefault(clusterSpec.SnowDatacenter)
+	if err := client.Delete(ctx, clusterSpec.SnowDatacenter); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("deleting snow datacenter: %v", err)
+	}
+
+	return nil
 }
 
 func (p *SnowProvider) PostClusterDeleteValidate(_ context.Context, _ *types.Cluster) error {
@@ -275,10 +356,21 @@ func (p *SnowProvider) PostClusterDeleteValidate(_ context.Context, _ *types.Clu
 	return nil
 }
 
+func (p *SnowProvider) PostMoveManagementToBootstrap(_ context.Context, _ *types.Cluster) error {
+	// NOOP
+	return nil
+}
+
 func (p *SnowProvider) InstallCustomProviderComponents(ctx context.Context, kubeconfigFile string) error {
 	return nil
 }
 
-func (p *SnowProvider) PostClusterDeleteForUpgrade(ctx context.Context, managementCluster *types.Cluster) error {
+// PreCoreComponentsUpgrade staisfies the Provider interface.
+func (p *SnowProvider) PreCoreComponentsUpgrade(
+	ctx context.Context,
+	cluster *types.Cluster,
+	managementComponents *cluster.ManagementComponents,
+	clusterSpec *cluster.Spec,
+) error {
 	return nil
 }

@@ -3,182 +3,42 @@ package snow
 import (
 	"context"
 
+	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/runtime"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1beta1"
 
-	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/clients/kubernetes"
 	"github.com/aws/eks-anywhere/pkg/cluster"
-	"github.com/aws/eks-anywhere/pkg/clusterapi"
 	snowv1 "github.com/aws/eks-anywhere/pkg/providers/snow/api/v1beta1"
 )
 
-func ControlPlaneObjects(ctx context.Context, clusterSpec *cluster.Spec, kubeClient kubernetes.Client) ([]runtime.Object, error) {
-	snowCluster := SnowCluster(clusterSpec)
-	new := SnowMachineTemplate(clusterapi.ControlPlaneMachineTemplateName(clusterSpec), clusterSpec.SnowMachineConfigs[clusterSpec.Cluster.Spec.ControlPlaneConfiguration.MachineGroupRef.Name])
-
-	old, err := oldControlPlaneMachineTemplate(ctx, kubeClient, clusterSpec)
-	if err != nil {
-		return nil, err
-	}
-	name, err := NewMachineTemplateName(new, old)
-	if err != nil {
-		return nil, err
-	}
-	new.SetName(name)
-
-	kubeadmControlPlane, err := KubeadmControlPlane(clusterSpec, new)
-	if err != nil {
-		return nil, err
-	}
-	capiCluster := CAPICluster(clusterSpec, snowCluster, kubeadmControlPlane)
-
-	return []runtime.Object{capiCluster, snowCluster, kubeadmControlPlane, new}, nil
-}
-
-func WorkersObjects(ctx context.Context, clusterSpec *cluster.Spec, kubeClient kubernetes.Client) ([]runtime.Object, error) {
-	workerMachineTemplates, kubeadmConfigTemplates, err := WorkersMachineAndConfigTemplate(ctx, kubeClient, clusterSpec)
+// ControlPlaneObjects generates the control plane objects for snow provider from clusterSpec.
+func ControlPlaneObjects(ctx context.Context, log logr.Logger, clusterSpec *cluster.Spec, kubeClient kubernetes.Client) ([]kubernetes.Object, error) {
+	cp, err := ControlPlaneSpec(ctx, log, kubeClient, clusterSpec)
 	if err != nil {
 		return nil, err
 	}
 
-	machineDeployments := MachineDeployments(clusterSpec, kubeadmConfigTemplates, workerMachineTemplates)
-
-	return concatWorkersObjects(machineDeployments, kubeadmConfigTemplates, workerMachineTemplates), nil
+	return cp.Objects(), nil
 }
 
-func concatWorkersObjects(machineDeployments map[string]*clusterv1.MachineDeployment,
-	kubeadmConfigTemplates map[string]*bootstrapv1.KubeadmConfigTemplate,
-	workerMachineTemplates map[string]*snowv1.AWSSnowMachineTemplate,
-) []runtime.Object {
-	workersObjs := make([]runtime.Object, 0, len(machineDeployments)+len(kubeadmConfigTemplates)+len(workerMachineTemplates))
-	for _, item := range machineDeployments {
-		workersObjs = append(workersObjs, item)
-	}
-	for _, item := range kubeadmConfigTemplates {
-		workersObjs = append(workersObjs, item)
-	}
-	for _, item := range workerMachineTemplates {
-		workersObjs = append(workersObjs, item)
-	}
-	return workersObjs
-}
-
-func WorkersMachineAndConfigTemplate(ctx context.Context, kubeClient kubernetes.Client, clusterSpec *cluster.Spec) (map[string]*snowv1.AWSSnowMachineTemplate, map[string]*bootstrapv1.KubeadmConfigTemplate, error) {
-	machines := make(map[string]*snowv1.AWSSnowMachineTemplate, len(clusterSpec.Cluster.Spec.WorkerNodeGroupConfigurations))
-	configs := make(map[string]*bootstrapv1.KubeadmConfigTemplate, len(clusterSpec.Cluster.Spec.WorkerNodeGroupConfigurations))
-
-	for _, workerNodeGroupConfig := range clusterSpec.Cluster.Spec.WorkerNodeGroupConfigurations {
-		md, err := clusterapi.MachineDeploymentInCluster(ctx, kubeClient, clusterSpec, workerNodeGroupConfig)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// build worker machineTemplate with new clusterSpec
-		newMachineTemplate := SnowMachineTemplate(clusterapi.WorkerMachineTemplateName(clusterSpec, workerNodeGroupConfig), clusterSpec.SnowMachineConfigs[workerNodeGroupConfig.MachineGroupRef.Name])
-
-		// build worker kubeadmConfigTemplate with new clusterSpec
-		newConfigTemplate, err := kubeadmConfigTemplate(clusterSpec, workerNodeGroupConfig)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// fetch the existing machineTemplate from cluster
-		oldMachineTemplate, err := oldWorkerMachineTemplate(ctx, kubeClient, clusterSpec, md)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// fetch the existing kubeadmConfigTemplate from cluster
-		oldConfigTemplate, err := clusterapi.KubeadmConfigTemplateInCluster(ctx, kubeClient, md)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// compare the old and new kubeadmConfigTemplate to determine whether to recreate new kubeadmConfigTemplate object
-		configName, err := NewKubeadmConfigTemplateName(newConfigTemplate, oldConfigTemplate)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// compare the old and new machineTemplate as well as kubeadmConfigTemplate to determine whether to recreate
-		// new machineTemplate object
-		machineName, err := NewWorkerMachineTemplateName(newMachineTemplate, oldMachineTemplate, newConfigTemplate, oldConfigTemplate)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		newConfigTemplate.SetName(configName)
-		newMachineTemplate.SetName(machineName)
-
-		configs[workerNodeGroupConfig.Name] = newConfigTemplate
-		machines[workerNodeGroupConfig.Name] = newMachineTemplate
-	}
-
-	return machines, configs, nil
-}
-
-func NewMachineTemplateName(new, old *snowv1.AWSSnowMachineTemplate) (string, error) {
-	if old == nil {
-		return new.GetName(), nil
-	}
-
-	if equality.Semantic.DeepDerivative(new.Spec, old.Spec) {
-		return old.GetName(), nil
-	}
-
-	return clusterapi.IncrementName(old.GetName())
-}
-
-func NewWorkerMachineTemplateName(newMt, oldMt *snowv1.AWSSnowMachineTemplate, newKct, oldKct *bootstrapv1.KubeadmConfigTemplate) (string, error) {
-	name, err := NewMachineTemplateName(newMt, oldMt)
+// WorkersObjects generates all the objects that compose a Snow specific CAPI spec for the worker nodes of an eks-a cluster.
+func WorkersObjects(ctx context.Context, log logr.Logger, clusterSpec *cluster.Spec, kubeClient kubernetes.Client) ([]kubernetes.Object, error) {
+	w, err := WorkersSpec(ctx, log, clusterSpec, kubeClient)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	if oldKct == nil {
-		return name, nil
-	}
-
-	if recreateKubeadmConfigTemplateNeeded(newKct, oldKct) {
-		name, err = clusterapi.IncrementName(oldMt.GetName())
-		if err != nil {
-			return "", err
-		}
-	}
-
-	return name, nil
+	return w.Objects(), nil
 }
 
-func NewKubeadmConfigTemplateName(new, old *bootstrapv1.KubeadmConfigTemplate) (string, error) {
-	if old == nil {
-		return new.GetName(), nil
+// MachineTemplateDeepDerivative compares two awssnowmachinetemplates to determine if their spec fields are equal.
+// DeepDerivative is used so that unset fields in new object are not compared. Although DeepDerivative treats
+// new subset slice equal to the original slice. i.e. DeepDerivative([]int{1}, []int{1, 2}) returns true.
+// Custom logic is added to justify this usecase since removing a device from the devices list shall trigger machine
+// rollout and recreate or the snow cluster goes into a state where the machines on the removed device can’t be deleted.
+func MachineTemplateDeepDerivative(new, old *snowv1.AWSSnowMachineTemplate) bool {
+	if len(new.Spec.Template.Spec.Devices) != len(old.Spec.Template.Spec.Devices) {
+		return false
 	}
-
-	if recreateKubeadmConfigTemplateNeeded(new, old) {
-		return clusterapi.IncrementName(old.GetName())
-	}
-
-	return old.GetName(), nil
-}
-
-func recreateKubeadmConfigTemplateNeeded(new, old *bootstrapv1.KubeadmConfigTemplate) bool {
-	// TODO: DeepDerivative treats empty map (length == 0) as unset field. We need to manually compare certain fields
-	// such as taints, so that setting it to empty will trigger machine recreate
-	if !v1alpha1.TaintsSliceEqual(new.Spec.Template.Spec.JoinConfiguration.NodeRegistration.Taints, old.Spec.Template.Spec.JoinConfiguration.NodeRegistration.Taints) {
-		return true
-	}
-	return !equality.Semantic.DeepDerivative(new.Spec, old.Spec)
-}
-
-// MachineHealthCheckObjects creates MachineHealthCheck resources for control plane and all the worker node groups.
-func MachineHealthCheckObjects(clusterSpec *cluster.Spec) []runtime.Object {
-	mhcWorkers := clusterapi.MachineHealthCheckForWorkers(clusterSpec)
-	o := make([]runtime.Object, 0, len(mhcWorkers)+1)
-	for _, item := range mhcWorkers {
-		o = append(o, item)
-	}
-	return append(o, clusterapi.MachineHealthCheckForControlPlane(clusterSpec))
+	return equality.Semantic.DeepDerivative(new.Spec, old.Spec)
 }

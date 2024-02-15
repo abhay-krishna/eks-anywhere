@@ -1,4 +1,4 @@
-package cilium
+package cilium_test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	v1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/aws/eks-anywhere/pkg/networking/cilium"
 	"github.com/aws/eks-anywhere/pkg/networking/cilium/mocks"
 	"github.com/aws/eks-anywhere/pkg/retrier"
 	"github.com/aws/eks-anywhere/pkg/types"
@@ -18,7 +19,7 @@ import (
 type retrierTest struct {
 	*WithT
 	ctx     context.Context
-	r       *retrierClient
+	r       *cilium.RetrierClient
 	c       *mocks.MockClient
 	cluster *types.Cluster
 }
@@ -29,7 +30,7 @@ func newRetrierTest(t *testing.T) *retrierTest {
 	return &retrierTest{
 		WithT: NewWithT(t),
 		ctx:   context.Background(),
-		r:     newRetrier(c),
+		r:     cilium.NewRetrier(c),
 		c:     c,
 		cluster: &types.Cluster{
 			KubeconfigFile: "kubeconfig",
@@ -48,7 +49,7 @@ func TestRetrierClientApplySuccess(t *testing.T) {
 
 func TestRetrierClientApplyError(t *testing.T) {
 	tt := newRetrierTest(t)
-	tt.r.Retrier = retrier.NewWithMaxRetries(5, 0)
+	tt.r = cilium.NewRetrier(tt.c, cilium.RetrierClientRetrier(retrier.NewWithMaxRetries(5, 0)))
 	data := []byte("data")
 	tt.c.EXPECT().ApplyKubeSpecFromBytes(tt.ctx, tt.cluster, data).Return(errors.New("error in apply")).Times(5)
 	tt.c.EXPECT().ApplyKubeSpecFromBytes(tt.ctx, tt.cluster, data).Return(nil).AnyTimes()
@@ -67,7 +68,7 @@ func TestRetrierClientDeleteSuccess(t *testing.T) {
 
 func TestRetrierClientDeleteError(t *testing.T) {
 	tt := newRetrierTest(t)
-	tt.r.Retrier = retrier.NewWithMaxRetries(5, 0)
+	tt.r = cilium.NewRetrier(tt.c, cilium.RetrierClientRetrier(retrier.NewWithMaxRetries(5, 0)))
 	data := []byte("data")
 	tt.c.EXPECT().DeleteKubeSpecFromBytes(tt.ctx, tt.cluster, data).Return(errors.New("error in delete")).Times(5)
 	tt.c.EXPECT().DeleteKubeSpecFromBytes(tt.ctx, tt.cluster, data).Return(nil).AnyTimes()
@@ -134,7 +135,7 @@ func TestRetrierClientWaitForPreflightDaemonSetSuccess(t *testing.T) {
 
 func TestRetrierClientWaitForPreflightDaemonSetError(t *testing.T) {
 	tt := newWaitForCiliumTest(t)
-	tt.r.Retrier = retrier.NewWithMaxRetries(5, 0)
+	tt.r = cilium.NewRetrier(tt.c, cilium.RetrierClientRetrier(retrier.NewWithMaxRetries(5, 0)))
 	tt.c.EXPECT().GetDaemonSet(tt.ctx, "cilium", "kube-system", tt.cluster.KubeconfigFile).Return(nil, errors.New("error in get")).Times(5)
 	tt.c.EXPECT().GetDaemonSet(tt.ctx, "cilium", "kube-system", tt.cluster.KubeconfigFile).Return(tt.ciliumDaemonSet, nil).AnyTimes()
 	tt.c.EXPECT().GetDaemonSet(tt.ctx, "cilium-pre-flight-check", "kube-system", tt.cluster.KubeconfigFile).Return(tt.preflightDaemonSet, nil).AnyTimes()
@@ -152,7 +153,7 @@ func TestRetrierClientRolloutRestartDaemonSetSuccess(t *testing.T) {
 
 func TestRetrierClientRolloutRestartDaemonSetError(t *testing.T) {
 	tt := newWaitForCiliumTest(t)
-	tt.r.Retrier = retrier.NewWithMaxRetries(5, 0)
+	tt.r = cilium.NewRetrier(tt.c, cilium.RetrierClientRetrier(retrier.NewWithMaxRetries(5, 0)))
 	tt.c.EXPECT().RolloutRestartDaemonSet(tt.ctx, "cilium", "kube-system", tt.cluster.KubeconfigFile).Return(errors.New("error in rollout")).Times(5)
 	tt.c.EXPECT().RolloutRestartDaemonSet(tt.ctx, "cilium", "kube-system", tt.cluster.KubeconfigFile).Return(nil).AnyTimes()
 
@@ -169,7 +170,7 @@ func TestRetrierClientWaitForPreflightDeploymentSuccess(t *testing.T) {
 
 func TestRetrierClientWaitForPreflightDeploymentError(t *testing.T) {
 	tt := newWaitForCiliumTest(t)
-	tt.r.Retrier = retrier.NewWithMaxRetries(5, 0)
+	tt.r = cilium.NewRetrier(tt.c, cilium.RetrierClientRetrier(retrier.NewWithMaxRetries(5, 0)))
 	tt.c.EXPECT().GetDeployment(tt.ctx, "cilium-pre-flight-check", "kube-system", tt.cluster.KubeconfigFile).Return(nil, errors.New("error in get")).Times(5)
 	tt.c.EXPECT().GetDeployment(tt.ctx, "cilium-pre-flight-check", "kube-system", tt.cluster.KubeconfigFile).Return(tt.preflightDeployment, nil).AnyTimes()
 
@@ -186,7 +187,7 @@ func TestRetrierClientWaitForCiliumDaemonSetSuccess(t *testing.T) {
 
 func TestRetrierClientWaitForCiliumDaemonSetError(t *testing.T) {
 	tt := newWaitForCiliumTest(t)
-	tt.r.Retrier = retrier.NewWithMaxRetries(5, 0)
+	tt.r = cilium.NewRetrier(tt.c, cilium.RetrierClientRetrier(retrier.NewWithMaxRetries(5, 0)))
 	tt.c.EXPECT().GetDaemonSet(tt.ctx, "cilium", "kube-system", tt.cluster.KubeconfigFile).Return(nil, errors.New("error in get")).Times(5)
 	tt.c.EXPECT().GetDaemonSet(tt.ctx, "cilium", "kube-system", tt.cluster.KubeconfigFile).Return(tt.ciliumDaemonSet, nil).AnyTimes()
 
@@ -203,7 +204,7 @@ func TestRetrierClientWaitForCiliumDeploymentSuccess(t *testing.T) {
 
 func TestRetrierClientWaitForCiliumDeploymentError(t *testing.T) {
 	tt := newWaitForCiliumTest(t)
-	tt.r.Retrier = retrier.NewWithMaxRetries(5, 0)
+	tt.r = cilium.NewRetrier(tt.c, cilium.RetrierClientRetrier(retrier.NewWithMaxRetries(5, 0)))
 	tt.c.EXPECT().GetDeployment(tt.ctx, "cilium-operator", "kube-system", tt.cluster.KubeconfigFile).Return(nil, errors.New("error in get")).Times(5)
 	tt.c.EXPECT().GetDeployment(tt.ctx, "cilium-operator", "kube-system", tt.cluster.KubeconfigFile).Return(tt.ciliumDeployment, nil).AnyTimes()
 

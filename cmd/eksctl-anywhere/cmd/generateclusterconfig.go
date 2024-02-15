@@ -13,7 +13,6 @@ import (
 	"github.com/aws/eks-anywhere/internal/pkg/api"
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/constants"
-	"github.com/aws/eks-anywhere/pkg/features"
 	"github.com/aws/eks-anywhere/pkg/providers"
 	"github.com/aws/eks-anywhere/pkg/templater"
 	"github.com/aws/eks-anywhere/pkg/validations"
@@ -116,9 +115,6 @@ func generateClusterConfig(clusterName string) error {
 		}
 		machineGroupYaml = append(machineGroupYaml, cpMcYaml, workerMcYaml, etcdMcYaml)
 	case constants.SnowProviderName:
-		if !features.IsActive(features.SnowProvider()) {
-			return fmt.Errorf("the snow infrastructure provider is still under development")
-		}
 		clusterConfigOpts = append(clusterConfigOpts, v1alpha1.WithClusterEndpoint())
 		datacenterConfig := v1alpha1.NewSnowDatacenterConfigGenerate(clusterName)
 		clusterConfigOpts = append(clusterConfigOpts, v1alpha1.WithDatacenterRef(datacenterConfig))
@@ -149,9 +145,6 @@ func generateClusterConfig(clusterName string) error {
 		}
 		machineGroupYaml = append(machineGroupYaml, cpMcYaml, workerMcYaml)
 	case constants.CloudStackProviderName:
-		if !features.IsActive(features.CloudStackProvider()) {
-			return fmt.Errorf("the cloudstack infrastructure provider is still under development")
-		}
 		clusterConfigOpts = append(clusterConfigOpts, v1alpha1.WithClusterEndpoint())
 		datacenterConfig := v1alpha1.NewCloudStackDatacenterConfigGenerate(clusterName)
 		clusterConfigOpts = append(clusterConfigOpts, v1alpha1.WithDatacenterRef(datacenterConfig))
@@ -159,6 +152,7 @@ func generateClusterConfig(clusterName string) error {
 			v1alpha1.ControlPlaneConfigCount(2),
 			v1alpha1.ExternalETCDConfigCount(3),
 			v1alpha1.WorkerNodeConfigCount(2),
+			v1alpha1.WorkerNodeConfigName(constants.DefaultWorkerNodeGroupName),
 		)
 		dcyaml, err := yaml.Marshal(datacenterConfig)
 		if err != nil {
@@ -217,6 +211,35 @@ func generateClusterConfig(clusterName string) error {
 		if err != nil {
 			return fmt.Errorf("generating cluster yaml: %v", err)
 		}
+		machineGroupYaml = append(machineGroupYaml, cpMcYaml, workerMcYaml)
+	case constants.NutanixProviderName:
+		datacenterConfig := v1alpha1.NewNutanixDatacenterConfigGenerate(clusterName)
+		dcYaml, err := yaml.Marshal(datacenterConfig)
+		if err != nil {
+			return fmt.Errorf("failed to generate cluster yaml: %v", err)
+		}
+		datacenterYaml = dcYaml
+		clusterConfigOpts = append(clusterConfigOpts, v1alpha1.WithDatacenterRef(datacenterConfig))
+		clusterConfigOpts = append(clusterConfigOpts, v1alpha1.WithClusterEndpoint())
+		clusterConfigOpts = append(clusterConfigOpts,
+			v1alpha1.ControlPlaneConfigCount(3),
+			v1alpha1.WorkerNodeConfigCount(3),
+			v1alpha1.WorkerNodeConfigName(constants.DefaultWorkerNodeGroupName),
+		)
+
+		cpMachineConfig := v1alpha1.NewNutanixMachineConfigGenerate(providers.GetControlPlaneNodeName(clusterName))
+		cpMcYaml, err := yaml.Marshal(cpMachineConfig)
+		if err != nil {
+			return fmt.Errorf("failed to generate cluster yaml: %v", err)
+		}
+		clusterConfigOpts = append(clusterConfigOpts, v1alpha1.WithCPMachineGroupRef(cpMachineConfig))
+
+		workerMachineConfig := v1alpha1.NewNutanixMachineConfigGenerate(clusterName)
+		workerMcYaml, err := yaml.Marshal(workerMachineConfig)
+		if err != nil {
+			return fmt.Errorf("failed to generate cluster yaml: %v", err)
+		}
+		clusterConfigOpts = append(clusterConfigOpts, v1alpha1.WithWorkerMachineGroupRef(workerMachineConfig))
 		machineGroupYaml = append(machineGroupYaml, cpMcYaml, workerMcYaml)
 	default:
 		return fmt.Errorf("not a valid provider")

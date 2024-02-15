@@ -93,19 +93,26 @@ func (v *ClusterSpecValidator) Validate(spec *ClusterSpec) error {
 	return nil
 }
 
-// NewClusterSpecValidator creates a ClusterSpecValidator instance with a set of default asseritons.
+// NewClusterSpecValidator creates a ClusterSpecValidator instance with a set of default assertions.
 // Any assertions passed will be registered in addition to the default assertions.
 func NewClusterSpecValidator(assertions ...ClusterSpecAssertion) *ClusterSpecValidator {
 	var v ClusterSpecValidator
 	// Register mandatory assertions. If an assertion becomes optional dependent on context move it
 	// to a New* func and register it dynamically. See assert.go for examples.
 	v.Register(
+		AssertK8SVersionNot120,
 		AssertDatacenterConfigValid,
 		AssertControlPlaneMachineRefExists,
 		AssertEtcdMachineRefExists,
 		AssertWorkerNodeGroupMachineRefsExists,
 		AssertMachineConfigsValid,
 		AssertMachineConfigNamespaceMatchesDatacenterConfig,
+		AssertOsFamilyValid,
+		AssertOSImageURL,
+		AssertTinkerbellIPAndControlPlaneIPNotSame,
+		AssertHookRetrievableWithoutProxy,
+		AssertUpgradeRolloutStrategyValid,
+		AssertAutoScalerDisabledForInPlace,
 	)
 	v.Register(assertions...)
 	return &v

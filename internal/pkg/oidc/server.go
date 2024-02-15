@@ -10,7 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 
-	jose "gopkg.in/square/go-jose.v2"
+	jose "github.com/go-jose/go-jose/v3"
 )
 
 type MinimalProvider struct {
@@ -29,7 +29,7 @@ type discoveryResponse struct {
 }
 
 func GenerateMinimalProvider(issuerURL string) (*MinimalProvider, error) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, fmt.Errorf("generating rsa key for OIDC: %v", err)
 	}

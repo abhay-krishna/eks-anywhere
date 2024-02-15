@@ -3,7 +3,6 @@ package logfetcher
 import (
 	"bytes"
 	"fmt"
-	"time"
 
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
 	awscodebuild "github.com/aws/aws-sdk-go/service/codebuild"
@@ -11,7 +10,8 @@ import (
 	"github.com/aws/eks-anywhere-test-tool/pkg/cloudwatch"
 	"github.com/aws/eks-anywhere-test-tool/pkg/codebuild"
 	"github.com/aws/eks-anywhere-test-tool/pkg/constants"
-	"github.com/aws/eks-anywhere-test-tool/pkg/testResults"
+	"github.com/aws/eks-anywhere-test-tool/pkg/fileutils"
+	"github.com/aws/eks-anywhere-test-tool/pkg/testresults"
 	"github.com/aws/eks-anywhere/pkg/logger"
 )
 
@@ -50,7 +50,7 @@ type LogFetcherOpt func(*testLogFetcher)
 
 func WithTestFilterByName(tests []string) LogFetcherOpt {
 	return func(l *testLogFetcher) {
-		l.filterTests = testResults.NewTestFilterByName(tests)
+		l.filterTests = testresults.NewTestFilterByName(tests)
 	}
 }
 
@@ -67,7 +67,7 @@ type testLogFetcher struct {
 	testAccountCwClient         *cloudwatch.Cloudwatch
 	buildAccountCodebuildClient *codebuild.Codebuild
 	writer                      *testsWriter
-	filterTests                 testResults.TestFilter
+	filterTests                 testresults.TestFilter
 	processCodebuild            codebuildConsumer
 	processMessages             messagesConsumer
 	processTest                 testConsumer
@@ -83,24 +83,24 @@ func New(buildAccountCwClient *cloudwatch.Cloudwatch, testAccountCwClient *cloud
 		o(l)
 	}
 
-	defultOutputFolder := time.Now().Format(time.RFC3339 + "-logs")
+	defaultOutputFolder := fileutils.GenOutputDirName("logs")
 
 	if l.filterTests == nil {
-		l.filterTests = testResults.GetFailedTests
+		l.filterTests = testresults.GetFailedTests
 	}
 
 	if l.processCodebuild == nil {
-		_ = l.ensureWriter(defultOutputFolder)
+		_ = l.ensureWriter(defaultOutputFolder)
 		l.processCodebuild = l.writer.writeCodeBuild
 	}
 
 	if l.processMessages == nil {
-		_ = l.ensureWriter(defultOutputFolder)
+		_ = l.ensureWriter(defaultOutputFolder)
 		l.processMessages = l.writer.writeMessages
 	}
 
 	if l.processTest == nil {
-		_ = l.ensureWriter(defultOutputFolder)
+		_ = l.ensureWriter(defaultOutputFolder)
 		l.processTest = l.writer.writeTest
 	}
 
@@ -140,7 +140,7 @@ func (l *testLogFetcher) FetchLogs(opts ...FetchLogsOpt) error {
 	return nil
 }
 
-func (l *testLogFetcher) GetBuildProjectLogs(project string, buildId string) ([]testResults.TestResult, error) {
+func (l *testLogFetcher) GetBuildProjectLogs(project string, buildId string) ([]testresults.TestResult, error) {
 	logger.Info("Fetching build project logs...")
 	build, err := l.buildAccountCodebuildClient.FetchBuildForProject(buildId)
 	if err != nil {
@@ -172,7 +172,7 @@ func (l *testLogFetcher) GetBuildProjectLogs(project string, buildId string) ([]
 	return filteredTests, nil
 }
 
-func (l *testLogFetcher) FetchTestLogs(tests []testResults.TestResult) error {
+func (l *testLogFetcher) FetchTestLogs(tests []testresults.TestResult) error {
 	logger.Info("Fetching individual test logs...")
 	for _, test := range tests {
 		stdout := fmt.Sprintf(ssmCommandExecutionLogStreamTemplate, test.CommandId, test.InstanceId, "stdout")

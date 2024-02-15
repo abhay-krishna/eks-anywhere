@@ -26,31 +26,15 @@ const (
 	validGitKnownHostsFilePath = "testdata/known_hosts"
 )
 
-type testFluxContext struct {
-	oldGithubToken   string
-	isGithubTokenSet bool
-}
-
-func (tctx *testFluxContext) SaveContext() {
-	tctx.oldGithubToken, tctx.isGithubTokenSet = os.LookupEnv(eksaGithubTokenEnv)
-	os.Setenv(eksaGithubTokenEnv, validPATValue)
-	os.Setenv(githubToken, os.Getenv(eksaGithubTokenEnv))
-}
-
-func (tctx *testFluxContext) RestoreContext() {
-	if tctx.isGithubTokenSet {
-		os.Setenv(eksaGithubTokenEnv, tctx.oldGithubToken)
-	} else {
-		os.Unsetenv(eksaGithubTokenEnv)
-	}
+func setupFluxContext(t *testing.T) {
+	t.Setenv(eksaGithubTokenEnv, validPATValue)
+	t.Setenv(githubToken, os.Getenv(eksaGithubTokenEnv))
 }
 
 func TestFluxInstallGithubToolkitsSuccess(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 
-	var tctx testFluxContext
-	tctx.SaveContext()
-	defer tctx.RestoreContext()
+	setupFluxContext(t)
 
 	owner := "janedoe"
 	repo := "gitops-fleet"
@@ -158,8 +142,8 @@ func TestFluxInstallGithubToolkitsSuccess(t *testing.T) {
 			).Return(bytes.Buffer{}, nil)
 
 			f := executables.NewFlux(executable)
-			if err := f.BootstrapToolkitsComponentsGithub(ctx, tt.cluster, tt.fluxConfig); err != nil {
-				t.Errorf("flux.BootstrapToolkitsComponentsGithub() error = %v, want nil", err)
+			if err := f.BootstrapGithub(ctx, tt.cluster, tt.fluxConfig); err != nil {
+				t.Errorf("flux.BootstrapGithub() error = %v, want nil", err)
 			}
 		})
 	}
@@ -168,9 +152,7 @@ func TestFluxInstallGithubToolkitsSuccess(t *testing.T) {
 func TestFluxUninstallGitOpsToolkitsComponents(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 
-	var tctx testFluxContext
-	tctx.SaveContext()
-	defer tctx.RestoreContext()
+	setupFluxContext(t)
 
 	tests := []struct {
 		testName     string
@@ -221,8 +203,8 @@ func TestFluxUninstallGitOpsToolkitsComponents(t *testing.T) {
 			).Return(bytes.Buffer{}, nil)
 
 			f := executables.NewFlux(executable)
-			if err := f.UninstallToolkitsComponents(ctx, tt.cluster, tt.fluxConfig); err != nil {
-				t.Errorf("flux.UninstallToolkitsComponents() error = %v, want nil", err)
+			if err := f.Uninstall(ctx, tt.cluster, tt.fluxConfig); err != nil {
+				t.Errorf("flux.Uninstall() error = %v, want nil", err)
 			}
 		})
 	}
@@ -231,9 +213,7 @@ func TestFluxUninstallGitOpsToolkitsComponents(t *testing.T) {
 func TestFluxPauseKustomization(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 
-	var tctx testFluxContext
-	tctx.SaveContext()
-	defer tctx.RestoreContext()
+	setupFluxContext(t)
 
 	tests := []struct {
 		testName     string
@@ -294,8 +274,8 @@ func TestFluxPauseKustomization(t *testing.T) {
 			).Return(bytes.Buffer{}, nil)
 
 			f := executables.NewFlux(executable)
-			if err := f.PauseKustomization(ctx, tt.cluster, tt.fluxConfig); err != nil {
-				t.Errorf("flux.PauseKustomization() error = %v, want nil", err)
+			if err := f.SuspendKustomization(ctx, tt.cluster, tt.fluxConfig); err != nil {
+				t.Errorf("flux.SuspendKustomization() error = %v, want nil", err)
 			}
 		})
 	}
@@ -304,9 +284,7 @@ func TestFluxPauseKustomization(t *testing.T) {
 func TestFluxResumeKustomization(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 
-	var tctx testFluxContext
-	tctx.SaveContext()
-	defer tctx.RestoreContext()
+	setupFluxContext(t)
 
 	tests := []struct {
 		testName     string
@@ -378,9 +356,7 @@ func TestFluxResumeKustomization(t *testing.T) {
 func TestFluxReconcile(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 
-	var tctx testFluxContext
-	tctx.SaveContext()
-	defer tctx.RestoreContext()
+	setupFluxContext(t)
 
 	tests := []struct {
 		testName     string
@@ -575,8 +551,8 @@ func TestFluxInstallGitToolkitsSuccess(t *testing.T) {
 			).Return(bytes.Buffer{}, nil)
 
 			f := executables.NewFlux(executable)
-			if err := f.BootstrapToolkitsComponentsGit(ctx, tt.cluster, tt.fluxConfig, tt.cliConfig); err != nil {
-				t.Errorf("flux.BootstrapToolkitsComponentsGit() error = %v, want nil", err)
+			if err := f.BootstrapGit(ctx, tt.cluster, tt.fluxConfig, tt.cliConfig); err != nil {
+				t.Errorf("flux.BootstrapGit() error = %v, want nil", err)
 			}
 		})
 	}

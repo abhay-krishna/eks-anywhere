@@ -80,7 +80,9 @@ func TestConfigureAWSIAMAuthInKubeadmControlPlane(t *testing.T) {
 										ImageRepository: "public.ecr.aws/eks-distro/etcd-io",
 										ImageTag:        "v3.4.16-eks-1-21-9",
 									},
-									ExtraArgs: map[string]string{},
+									ExtraArgs: map[string]string{
+										"cipher-suites": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+									},
 								},
 							},
 							APIServer: bootstrapv1.APIServer{
@@ -103,9 +105,15 @@ func TestConfigureAWSIAMAuthInKubeadmControlPlane(t *testing.T) {
 										},
 									},
 								},
+								CertSANs: []string{"foo.bar", "11.11.11.11"},
 							},
 							ControllerManager: bootstrapv1.ControlPlaneComponent{
-								ExtraArgs: tlsCipherSuitesArgs(),
+								ExtraArgs:    tlsCipherSuitesArgs(),
+								ExtraVolumes: []bootstrapv1.HostPathMount{},
+							},
+							Scheduler: bootstrapv1.ControlPlaneComponent{
+								ExtraArgs:    map[string]string{},
+								ExtraVolumes: []bootstrapv1.HostPathMount{},
 							},
 						},
 						InitConfiguration: &bootstrapv1.InitConfiguration{
@@ -173,7 +181,7 @@ contexts:
 								Permissions: "0640",
 								ContentFrom: &bootstrapv1.FileSource{
 									Secret: bootstrapv1.SecretFileSource{
-										Name: "aws-iam-authenticator-ca",
+										Name: "test-cluster-aws-iam-authenticator-ca",
 										Key:  "cert.pem",
 									},
 								},
@@ -184,7 +192,7 @@ contexts:
 								Permissions: "0640",
 								ContentFrom: &bootstrapv1.FileSource{
 									Secret: bootstrapv1.SecretFileSource{
-										Name: "aws-iam-authenticator-ca",
+										Name: "test-cluster-aws-iam-authenticator-ca",
 										Key:  "key.pem",
 									},
 								},
@@ -277,7 +285,9 @@ func TestConfigureOIDCInKubeadmControlPlane(t *testing.T) {
 										ImageRepository: "public.ecr.aws/eks-distro/etcd-io",
 										ImageTag:        "v3.4.16-eks-1-21-9",
 									},
-									ExtraArgs: map[string]string{},
+									ExtraArgs: map[string]string{
+										"cipher-suites": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+									},
 								},
 							},
 							APIServer: bootstrapv1.APIServer{
@@ -293,9 +303,15 @@ func TestConfigureOIDCInKubeadmControlPlane(t *testing.T) {
 									},
 									ExtraVolumes: []bootstrapv1.HostPathMount{},
 								},
+								CertSANs: []string{"foo.bar", "11.11.11.11"},
 							},
 							ControllerManager: bootstrapv1.ControlPlaneComponent{
-								ExtraArgs: tlsCipherSuitesArgs(),
+								ExtraArgs:    tlsCipherSuitesArgs(),
+								ExtraVolumes: []bootstrapv1.HostPathMount{},
+							},
+							Scheduler: bootstrapv1.ControlPlaneComponent{
+								ExtraArgs:    map[string]string{},
+								ExtraVolumes: []bootstrapv1.HostPathMount{},
 							},
 						},
 						InitConfiguration: &bootstrapv1.InitConfiguration{
@@ -400,7 +416,9 @@ func TestConfigurePodIamAuthInKubeadmControlPlane(t *testing.T) {
 										ImageRepository: "public.ecr.aws/eks-distro/etcd-io",
 										ImageTag:        "v3.4.16-eks-1-21-9",
 									},
-									ExtraArgs: map[string]string{},
+									ExtraArgs: map[string]string{
+										"cipher-suites": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+									},
 								},
 							},
 							APIServer: bootstrapv1.APIServer{
@@ -410,9 +428,15 @@ func TestConfigurePodIamAuthInKubeadmControlPlane(t *testing.T) {
 									},
 									ExtraVolumes: []bootstrapv1.HostPathMount{},
 								},
+								CertSANs: []string{"foo.bar", "11.11.11.11"},
 							},
 							ControllerManager: bootstrapv1.ControlPlaneComponent{
-								ExtraArgs: tlsCipherSuitesArgs(),
+								ExtraArgs:    tlsCipherSuitesArgs(),
+								ExtraVolumes: []bootstrapv1.HostPathMount{},
+							},
+							Scheduler: bootstrapv1.ControlPlaneComponent{
+								ExtraArgs:    map[string]string{},
+								ExtraVolumes: []bootstrapv1.HostPathMount{},
 							},
 						},
 						InitConfiguration: &bootstrapv1.InitConfiguration{

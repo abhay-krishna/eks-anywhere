@@ -18,6 +18,12 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+delete_cluster_controller_image() {
+    aws ecr-public batch-delete-image --repository-name eks-anywhere-cluster-controller --image-ids=imageTag=${PULL_PULL_SHA}.${PULL_BASE_REF} --region us-east-1
+}
+
+trap 'unset AWS_PROFILE; delete_cluster_controller_image' EXIT
+
 if [ "$AWS_ROLE_ARN" == "" ]; then
     echo "Empty AWS_ROLE_ARN, this script must be run in a postsubmit pod with IAM Roles for Service Accounts"
     exit 1
@@ -30,8 +36,9 @@ fi
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
 BIN_FOLDER=$REPO_ROOT/bin
-TEST_REGEX="${1:-TestDockerKubernetes121SimpleFlow}"
+TEST_REGEX="${1:-TestDockerKubernetes125SimpleFlow}"
 BRANCH_NAME="${2:-main}"
+
 
 cat << EOF > config_file
 [default]
@@ -79,6 +86,7 @@ $BIN_FOLDER/test e2e run \
     -r ${TEST_REGEX} \
     --bundles-override=${BUNDLES_OVERRIDE} \
     --test-report-folder=${TEST_REPORT_FOLDER} \
+    --baremetal-branch="" \
     -v4
 
 # Faking cross-platform versioned folders for dry-run

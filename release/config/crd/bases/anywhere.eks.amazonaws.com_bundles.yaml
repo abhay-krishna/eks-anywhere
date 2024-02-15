@@ -19,7 +19,7 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Bundles is the Schema for the bundles API
+        description: Bundles is the Schema for the bundles API.
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -34,7 +34,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: BundlesSpec defines the desired state of Bundles
+            description: BundlesSpec defines the desired state of Bundles.
             properties:
               cliMaxVersion:
                 type: string
@@ -47,6 +47,7 @@ spec:
                 items:
                   properties:
                     aws:
+                      description: This field has been deprecated
                       properties:
                         clusterTemplate:
                           properties:
@@ -215,7 +216,7 @@ spec:
                       - metadata
                       - version
                       type: object
-                    bottlerocketAdmin:
+                    bottlerocketHostContainers:
                       properties:
                         admin:
                           properties:
@@ -246,12 +247,36 @@ spec:
                               description: The image repository, name, and tag
                               type: string
                           type: object
-                      required:
-                      - admin
-                      type: object
-                    bottlerocketBootstrap:
-                      properties:
-                        bootstrap:
+                        control:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
+                        kubeadmBootstrap:
                           properties:
                             arch:
                               description: Architectures of the asset
@@ -281,7 +306,9 @@ spec:
                               type: string
                           type: object
                       required:
-                      - bootstrap
+                      - admin
+                      - control
+                      - kubeadmBootstrap
                       type: object
                     certManager:
                       properties:
@@ -585,6 +612,35 @@ spec:
                               description: URI points to the manifest yaml file
                               type: string
                           type: object
+                        kubeRbacProxy:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
                         kubeVip:
                           properties:
                             arch:
@@ -625,6 +681,7 @@ spec:
                       required:
                       - clusterAPIController
                       - components
+                      - kubeRbacProxy
                       - kubeVip
                       - metadata
                       - version
@@ -881,6 +938,45 @@ spec:
                       type: object
                     eksD:
                       properties:
+                        ami:
+                          description: Ami points to a collection of AMIs built with
+                            this eks-d version
+                          properties:
+                            bottlerocket:
+                              properties:
+                                arch:
+                                  description: Architectures of the asset
+                                  items:
+                                    type: string
+                                  type: array
+                                description:
+                                  type: string
+                                name:
+                                  description: The asset name
+                                  type: string
+                                os:
+                                  description: Operating system of the asset
+                                  enum:
+                                  - linux
+                                  - darwin
+                                  - windows
+                                  type: string
+                                osName:
+                                  description: Name of the OS like ubuntu, bottlerocket
+                                  type: string
+                                sha256:
+                                  description: The sha256 of the asset, only applies
+                                    for 'file' store
+                                  type: string
+                                sha512:
+                                  description: The sha512 of the asset, only applies
+                                    for 'file' store
+                                  type: string
+                                uri:
+                                  description: The URI where the asset is located
+                                  type: string
+                              type: object
+                          type: object
                         channel:
                           description: Release branch of the EKS-D release like 1-19,
                             1-20
@@ -889,10 +985,154 @@ spec:
                           description: Components refers to the url that points to
                             the EKS-D release CRD
                           type: string
+                        containerd:
+                          description: Containerd points to the containerd binary
+                            baked into this eks-D based node image
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            sha256:
+                              description: The sha256 of the asset, only applies for
+                                'file' store
+                              type: string
+                            sha512:
+                              description: The sha512 of the asset, only applies for
+                                'file' store
+                              type: string
+                            uri:
+                              description: The URI where the asset is located
+                              type: string
+                          type: object
+                        crictl:
+                          description: Crictl points to the crictl binary/tarball
+                            built for this eks-d kube version
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            sha256:
+                              description: The sha256 of the asset, only applies for
+                                'file' store
+                              type: string
+                            sha512:
+                              description: The sha512 of the asset, only applies for
+                                'file' store
+                              type: string
+                            uri:
+                              description: The URI where the asset is located
+                              type: string
+                          type: object
+                        etcdadm:
+                          description: Etcdadm points to the etcdadm binary/tarball
+                            built for this eks-d kube version
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            sha256:
+                              description: The sha256 of the asset, only applies for
+                                'file' store
+                              type: string
+                            sha512:
+                              description: The sha512 of the asset, only applies for
+                                'file' store
+                              type: string
+                            uri:
+                              description: The URI where the asset is located
+                              type: string
+                          type: object
                         gitCommit:
                           description: Git commit the component is built from, before
                             any patches
                           type: string
+                        imagebuilder:
+                          description: ImageBuilder points to the image-builder binary
+                            used to build eks-D based node images
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            sha256:
+                              description: The sha256 of the asset, only applies for
+                                'file' store
+                              type: string
+                            sha512:
+                              description: The sha512 of the asset, only applies for
+                                'file' store
+                              type: string
+                            uri:
+                              description: The URI where the asset is located
+                              type: string
+                          type: object
                         kindNode:
                           description: KindNode points to a kind image built with
                             this eks-d version
@@ -934,7 +1174,7 @@ spec:
                         name:
                           type: string
                         ova:
-                          description: Ova points to a collection of Ovas built with
+                          description: Ova points to a collection of OVAs built with
                             this eks-d version
                           properties:
                             bottlerocket:
@@ -944,178 +1184,8 @@ spec:
                                   items:
                                     type: string
                                   type: array
-                                crictl:
-                                  properties:
-                                    arch:
-                                      description: Architectures of the asset
-                                      items:
-                                        type: string
-                                      type: array
-                                    description:
-                                      type: string
-                                    name:
-                                      description: The asset name
-                                      type: string
-                                    os:
-                                      description: Operating system of the asset
-                                      enum:
-                                      - linux
-                                      - darwin
-                                      - windows
-                                      type: string
-                                    osName:
-                                      description: Name of the OS like ubuntu, bottlerocket
-                                      type: string
-                                    sha256:
-                                      description: The sha256 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    sha512:
-                                      description: The sha512 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    uri:
-                                      description: The URI where the asset is located
-                                      type: string
-                                  type: object
                                 description:
                                   type: string
-                                etcdadm:
-                                  properties:
-                                    arch:
-                                      description: Architectures of the asset
-                                      items:
-                                        type: string
-                                      type: array
-                                    description:
-                                      type: string
-                                    name:
-                                      description: The asset name
-                                      type: string
-                                    os:
-                                      description: Operating system of the asset
-                                      enum:
-                                      - linux
-                                      - darwin
-                                      - windows
-                                      type: string
-                                    osName:
-                                      description: Name of the OS like ubuntu, bottlerocket
-                                      type: string
-                                    sha256:
-                                      description: The sha256 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    sha512:
-                                      description: The sha512 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    uri:
-                                      description: The URI where the asset is located
-                                      type: string
-                                  type: object
-                                name:
-                                  description: The asset name
-                                  type: string
-                                os:
-                                  description: Operating system of the asset
-                                  enum:
-                                  - linux
-                                  - darwin
-                                  - windows
-                                  type: string
-                                osName:
-                                  description: Name of the OS like ubuntu, bottlerocket
-                                  type: string
-                                sha256:
-                                  description: The sha256 of the asset, only applies
-                                    for 'file' store
-                                  type: string
-                                sha512:
-                                  description: The sha512 of the asset, only applies
-                                    for 'file' store
-                                  type: string
-                                uri:
-                                  description: The URI where the asset is located
-                                  type: string
-                              type: object
-                            ubuntu:
-                              properties:
-                                arch:
-                                  description: Architectures of the asset
-                                  items:
-                                    type: string
-                                  type: array
-                                crictl:
-                                  properties:
-                                    arch:
-                                      description: Architectures of the asset
-                                      items:
-                                        type: string
-                                      type: array
-                                    description:
-                                      type: string
-                                    name:
-                                      description: The asset name
-                                      type: string
-                                    os:
-                                      description: Operating system of the asset
-                                      enum:
-                                      - linux
-                                      - darwin
-                                      - windows
-                                      type: string
-                                    osName:
-                                      description: Name of the OS like ubuntu, bottlerocket
-                                      type: string
-                                    sha256:
-                                      description: The sha256 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    sha512:
-                                      description: The sha512 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    uri:
-                                      description: The URI where the asset is located
-                                      type: string
-                                  type: object
-                                description:
-                                  type: string
-                                etcdadm:
-                                  properties:
-                                    arch:
-                                      description: Architectures of the asset
-                                      items:
-                                        type: string
-                                      type: array
-                                    description:
-                                      type: string
-                                    name:
-                                      description: The asset name
-                                      type: string
-                                    os:
-                                      description: Operating system of the asset
-                                      enum:
-                                      - linux
-                                      - darwin
-                                      - windows
-                                      type: string
-                                    osName:
-                                      description: Name of the OS like ubuntu, bottlerocket
-                                      type: string
-                                    sha256:
-                                      description: The sha256 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    sha512:
-                                      description: The sha512 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    uri:
-                                      description: The URI where the asset is located
-                                      type: string
-                                  type: object
                                 name:
                                   description: The asset name
                                   type: string
@@ -1153,178 +1223,8 @@ spec:
                                   items:
                                     type: string
                                   type: array
-                                crictl:
-                                  properties:
-                                    arch:
-                                      description: Architectures of the asset
-                                      items:
-                                        type: string
-                                      type: array
-                                    description:
-                                      type: string
-                                    name:
-                                      description: The asset name
-                                      type: string
-                                    os:
-                                      description: Operating system of the asset
-                                      enum:
-                                      - linux
-                                      - darwin
-                                      - windows
-                                      type: string
-                                    osName:
-                                      description: Name of the OS like ubuntu, bottlerocket
-                                      type: string
-                                    sha256:
-                                      description: The sha256 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    sha512:
-                                      description: The sha512 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    uri:
-                                      description: The URI where the asset is located
-                                      type: string
-                                  type: object
                                 description:
                                   type: string
-                                etcdadm:
-                                  properties:
-                                    arch:
-                                      description: Architectures of the asset
-                                      items:
-                                        type: string
-                                      type: array
-                                    description:
-                                      type: string
-                                    name:
-                                      description: The asset name
-                                      type: string
-                                    os:
-                                      description: Operating system of the asset
-                                      enum:
-                                      - linux
-                                      - darwin
-                                      - windows
-                                      type: string
-                                    osName:
-                                      description: Name of the OS like ubuntu, bottlerocket
-                                      type: string
-                                    sha256:
-                                      description: The sha256 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    sha512:
-                                      description: The sha512 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    uri:
-                                      description: The URI where the asset is located
-                                      type: string
-                                  type: object
-                                name:
-                                  description: The asset name
-                                  type: string
-                                os:
-                                  description: Operating system of the asset
-                                  enum:
-                                  - linux
-                                  - darwin
-                                  - windows
-                                  type: string
-                                osName:
-                                  description: Name of the OS like ubuntu, bottlerocket
-                                  type: string
-                                sha256:
-                                  description: The sha256 of the asset, only applies
-                                    for 'file' store
-                                  type: string
-                                sha512:
-                                  description: The sha512 of the asset, only applies
-                                    for 'file' store
-                                  type: string
-                                uri:
-                                  description: The URI where the asset is located
-                                  type: string
-                              type: object
-                            ubuntu:
-                              properties:
-                                arch:
-                                  description: Architectures of the asset
-                                  items:
-                                    type: string
-                                  type: array
-                                crictl:
-                                  properties:
-                                    arch:
-                                      description: Architectures of the asset
-                                      items:
-                                        type: string
-                                      type: array
-                                    description:
-                                      type: string
-                                    name:
-                                      description: The asset name
-                                      type: string
-                                    os:
-                                      description: Operating system of the asset
-                                      enum:
-                                      - linux
-                                      - darwin
-                                      - windows
-                                      type: string
-                                    osName:
-                                      description: Name of the OS like ubuntu, bottlerocket
-                                      type: string
-                                    sha256:
-                                      description: The sha256 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    sha512:
-                                      description: The sha512 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    uri:
-                                      description: The URI where the asset is located
-                                      type: string
-                                  type: object
-                                description:
-                                  type: string
-                                etcdadm:
-                                  properties:
-                                    arch:
-                                      description: Architectures of the asset
-                                      items:
-                                        type: string
-                                      type: array
-                                    description:
-                                      type: string
-                                    name:
-                                      description: The asset name
-                                      type: string
-                                    os:
-                                      description: Operating system of the asset
-                                      enum:
-                                      - linux
-                                      - darwin
-                                      - windows
-                                      type: string
-                                    osName:
-                                      description: Name of the OS like ubuntu, bottlerocket
-                                      type: string
-                                    sha256:
-                                      description: The sha256 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    sha512:
-                                      description: The sha512 of the asset, only applies
-                                        for 'file' store
-                                      type: string
-                                    uri:
-                                      description: The URI where the asset is located
-                                      type: string
-                                  type: object
                                 name:
                                   description: The asset name
                                   type: string
@@ -1792,9 +1692,9 @@ spec:
                       type: object
                     kubeVersion:
                       type: string
-                    packageController:
+                    nutanix:
                       properties:
-                        helmChart:
+                        cloudProvider:
                           properties:
                             arch:
                               description: Architectures of the asset
@@ -1823,123 +1723,6 @@ spec:
                               description: The image repository, name, and tag
                               type: string
                           type: object
-                        packageController:
-                          properties:
-                            arch:
-                              description: Architectures of the asset
-                              items:
-                                type: string
-                              type: array
-                            description:
-                              type: string
-                            imageDigest:
-                              description: The SHA256 digest of the image manifest
-                              type: string
-                            name:
-                              description: The asset name
-                              type: string
-                            os:
-                              description: Operating system of the asset
-                              enum:
-                              - linux
-                              - darwin
-                              - windows
-                              type: string
-                            osName:
-                              description: Name of the OS like ubuntu, bottlerocket
-                              type: string
-                            uri:
-                              description: The image repository, name, and tag
-                              type: string
-                          type: object
-                        version:
-                          type: string
-                      required:
-                      - packageController
-                      type: object
-                    snow:
-                      properties:
-                        components:
-                          properties:
-                            uri:
-                              description: URI points to the manifest yaml file
-                              type: string
-                          type: object
-                        kubeVip:
-                          properties:
-                            arch:
-                              description: Architectures of the asset
-                              items:
-                                type: string
-                              type: array
-                            description:
-                              type: string
-                            imageDigest:
-                              description: The SHA256 digest of the image manifest
-                              type: string
-                            name:
-                              description: The asset name
-                              type: string
-                            os:
-                              description: Operating system of the asset
-                              enum:
-                              - linux
-                              - darwin
-                              - windows
-                              type: string
-                            osName:
-                              description: Name of the OS like ubuntu, bottlerocket
-                              type: string
-                            uri:
-                              description: The image repository, name, and tag
-                              type: string
-                          type: object
-                        manager:
-                          properties:
-                            arch:
-                              description: Architectures of the asset
-                              items:
-                                type: string
-                              type: array
-                            description:
-                              type: string
-                            imageDigest:
-                              description: The SHA256 digest of the image manifest
-                              type: string
-                            name:
-                              description: The asset name
-                              type: string
-                            os:
-                              description: Operating system of the asset
-                              enum:
-                              - linux
-                              - darwin
-                              - windows
-                              type: string
-                            osName:
-                              description: Name of the OS like ubuntu, bottlerocket
-                              type: string
-                            uri:
-                              description: The image repository, name, and tag
-                              type: string
-                          type: object
-                        metadata:
-                          properties:
-                            uri:
-                              description: URI points to the manifest yaml file
-                              type: string
-                          type: object
-                        version:
-                          type: string
-                      required:
-                      - components
-                      - kubeVip
-                      - manager
-                      - metadata
-                      - version
-                      type: object
-                    tinkerbell:
-                      properties:
                         clusterAPIController:
                           properties:
                             arch:
@@ -2016,10 +1799,362 @@ spec:
                               description: URI points to the manifest yaml file
                               type: string
                           type: object
+                        version:
+                          type: string
+                      required:
+                      - clusterAPIController
+                      - clusterTemplate
+                      - components
+                      - kubeVip
+                      - metadata
+                      - version
+                      type: object
+                    packageController:
+                      properties:
+                        credentialProviderPackage:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
+                        helmChart:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
+                        packageController:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
+                        tokenRefresher:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
+                        version:
+                          type: string
+                      required:
+                      - packageController
+                      - tokenRefresher
+                      type: object
+                    snow:
+                      properties:
+                        bottlerocketBootstrapSnow:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
+                        components:
+                          properties:
+                            uri:
+                              description: URI points to the manifest yaml file
+                              type: string
+                          type: object
+                        kubeVip:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
+                        manager:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
+                        metadata:
+                          properties:
+                            uri:
+                              description: URI points to the manifest yaml file
+                              type: string
+                          type: object
+                        version:
+                          type: string
+                      required:
+                      - bottlerocketBootstrapSnow
+                      - components
+                      - kubeVip
+                      - manager
+                      - metadata
+                      - version
+                      type: object
+                    tinkerbell:
+                      properties:
+                        clusterAPIController:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
+                        clusterTemplate:
+                          properties:
+                            uri:
+                              description: URI points to the manifest yaml file
+                              type: string
+                          type: object
+                        components:
+                          properties:
+                            uri:
+                              description: URI points to the manifest yaml file
+                              type: string
+                          type: object
+                        envoy:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
+                        kubeVip:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
+                        metadata:
+                          properties:
+                            uri:
+                              description: URI points to the manifest yaml file
+                              type: string
+                          type: object
                         tinkerbellStack:
                           properties:
                             actions:
-                              description: Tinkerbell Template Actions
+                              description: Tinkerbell Template Actions.
                               properties:
                                 cexec:
                                   properties:
@@ -2244,35 +2379,6 @@ spec:
                                   description: The image repository, name, and tag
                                   type: string
                               type: object
-                            cfssl:
-                              properties:
-                                arch:
-                                  description: Architectures of the asset
-                                  items:
-                                    type: string
-                                  type: array
-                                description:
-                                  type: string
-                                imageDigest:
-                                  description: The SHA256 digest of the image manifest
-                                  type: string
-                                name:
-                                  description: The asset name
-                                  type: string
-                                os:
-                                  description: Operating system of the asset
-                                  enum:
-                                  - linux
-                                  - darwin
-                                  - windows
-                                  type: string
-                                osName:
-                                  description: Name of the OS like ubuntu, bottlerocket
-                                  type: string
-                                uri:
-                                  description: The image repository, name, and tag
-                                  type: string
-                              type: object
                             hegel:
                               properties:
                                 arch:
@@ -2303,7 +2409,7 @@ spec:
                                   type: string
                               type: object
                             hook:
-                              description: Tinkerbell hook OS
+                              description: Tinkerbell hook OS.
                               properties:
                                 bootkit:
                                   properties:
@@ -2722,7 +2828,6 @@ spec:
                           required:
                           - actions
                           - boots
-                          - cfssl
                           - hegel
                           - hook
                           - rufio
@@ -2735,9 +2840,46 @@ spec:
                       - clusterAPIController
                       - clusterTemplate
                       - components
+                      - envoy
                       - kubeVip
                       - metadata
                       - version
+                      type: object
+                    upgrader:
+                      description: UpgraderBundle is a In-place Kubernetes version
+                        upgrader bundle.
+                      properties:
+                        upgrader:
+                          properties:
+                            arch:
+                              description: Architectures of the asset
+                              items:
+                                type: string
+                              type: array
+                            description:
+                              type: string
+                            imageDigest:
+                              description: The SHA256 digest of the image manifest
+                              type: string
+                            name:
+                              description: The asset name
+                              type: string
+                            os:
+                              description: Operating system of the asset
+                              enum:
+                              - linux
+                              - darwin
+                              - windows
+                              type: string
+                            osName:
+                              description: Name of the OS like ubuntu, bottlerocket
+                              type: string
+                            uri:
+                              description: The image repository, name, and tag
+                              type: string
+                          type: object
+                      required:
+                      - upgrader
                       type: object
                     vSphere:
                       properties:
@@ -2783,6 +2925,7 @@ spec:
                               type: string
                           type: object
                         driver:
+                          description: This field has been deprecated
                           properties:
                             arch:
                               description: Architectures of the asset
@@ -2905,6 +3048,7 @@ spec:
                               type: string
                           type: object
                         syncer:
+                          description: This field has been deprecated
                           properties:
                             arch:
                               description: Architectures of the asset
@@ -2939,19 +3083,15 @@ spec:
                       - clusterAPIController
                       - clusterTemplate
                       - components
-                      - driver
                       - kubeProxy
                       - kubeVip
                       - manager
                       - metadata
-                      - syncer
                       - version
                       type: object
                   required:
-                  - aws
                   - bootstrap
-                  - bottlerocketAdmin
-                  - bottlerocketBootstrap
+                  - bottlerocketHostContainers
                   - certManager
                   - cilium
                   - clusterAPI
@@ -2975,7 +3115,7 @@ spec:
             - versionsBundles
             type: object
           status:
-            description: BundlesStatus defines the observed state of Bundles
+            description: BundlesStatus defines the observed state of Bundles.
             type: object
         type: object
     served: true

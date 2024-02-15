@@ -1,14 +1,13 @@
 package api
 
 import (
-	"fmt"
 	"os"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/yaml"
 
 	anywherev1 "github.com/aws/eks-anywhere/pkg/api/v1alpha1"
-	"github.com/aws/eks-anywhere/pkg/templater"
+	"github.com/aws/eks-anywhere/pkg/cluster"
 )
 
 type VSphereConfig struct {
@@ -18,49 +17,39 @@ type VSphereConfig struct {
 
 type VSphereFiller func(config VSphereConfig)
 
-func AutoFillVSphereProvider(filename string, fillers ...VSphereFiller) ([]byte, error) {
-	vsphereDatacenterConfig, err := anywherev1.GetVSphereDatacenterConfig(filename)
-	if err != nil {
-		return nil, fmt.Errorf("unable to get vsphere datacenter config from file: %v", err)
+// VSphereToConfigFiller transforms a set of VSphereFiller's in a single ClusterConfigFiller.
+func VSphereToConfigFiller(fillers ...VSphereFiller) ClusterConfigFiller {
+	return func(c *cluster.Config) {
+		updateVSphere(c, fillers...)
 	}
+}
 
-	vsphereMachineConfigs, err := anywherev1.GetVSphereMachineConfigs(filename)
-	if err != nil {
-		return nil, fmt.Errorf("unable to get vsphere machine config from file: %v", err)
-	}
-
-	config := VSphereConfig{
-		datacenterConfig: vsphereDatacenterConfig,
-		machineConfigs:   vsphereMachineConfigs,
+// updateVSphere updates the vSphere datacenter and machine configs in the
+// cluster.Config by applying all the fillers.
+func updateVSphere(config *cluster.Config, fillers ...VSphereFiller) {
+	vc := VSphereConfig{
+		datacenterConfig: config.VSphereDatacenter,
+		machineConfigs:   config.VSphereMachineConfigs,
 	}
 
 	for _, f := range fillers {
-		f(config)
+		f(vc)
 	}
-
-	resources := make([]interface{}, 0, len(config.machineConfigs)+1)
-	resources = append(resources, config.datacenterConfig)
-	for _, m := range config.machineConfigs {
-		resources = append(resources, m)
-	}
-
-	yamlResources := make([][]byte, 0, len(resources))
-	for _, r := range resources {
-		yamlContent, err := yaml.Marshal(r)
-		if err != nil {
-			return nil, fmt.Errorf("marshalling vsphere resource: %v", err)
-		}
-
-		yamlResources = append(yamlResources, yamlContent)
-	}
-
-	return templater.AppendYamlResources(yamlResources...), nil
 }
 
 func WithOsFamilyForAllMachines(value anywherev1.OSFamily) VSphereFiller {
 	return func(config VSphereConfig) {
 		for _, m := range config.machineConfigs {
 			m.Spec.OSFamily = value
+		}
+	}
+}
+
+// WithTagsForAllMachines add provided tags to all machines.
+func WithTagsForAllMachines(value []string) VSphereFiller {
+	return func(config VSphereConfig) {
+		for _, m := range config.machineConfigs {
+			m.Spec.TagIDs = value
 		}
 	}
 }
@@ -109,6 +98,13 @@ func WithTemplateForAllMachines(value string) VSphereFiller {
 	}
 }
 
+// WithMachineTemplate configs template in machine config.
+func WithMachineTemplate(machineConfigName string, template string) VSphereFiller {
+	return func(config VSphereConfig) {
+		config.machineConfigs[machineConfigName].Spec.Template = template
+	}
+}
+
 func WithStoragePolicyNameForAllMachines(value string) VSphereFiller {
 	return func(config VSphereConfig) {
 		for _, m := range config.machineConfigs {
@@ -148,6 +144,17 @@ func WithResourcePoolForAllMachines(value string) VSphereFiller {
 	}
 }
 
+// WithResourcePoolforCPMachines sets the resource pool for control plane machines to the specified value.
+func WithResourcePoolforCPMachines(value string) VSphereFiller {
+	return func(config VSphereConfig) {
+		for _, m := range config.machineConfigs {
+			if strings.HasSuffix(m.Name, "-cp") {
+				m.Spec.ResourcePool = value
+			}
+		}
+	}
+}
+
 func WithNetwork(value string) VSphereFiller {
 	return func(config VSphereConfig) {
 		config.datacenterConfig.Spec.Network = value
@@ -176,6 +183,42 @@ func WithDatacenter(value string) VSphereFiller {
 	}
 }
 
+// WithCloneModeForAllMachines sets the CloneMode for all VSphereMachineConfigs.
+func WithCloneModeForAllMachines(value anywherev1.CloneMode) VSphereFiller {
+	return func(config VSphereConfig) {
+		for _, m := range config.machineConfigs {
+			m.Spec.CloneMode = value
+		}
+	}
+}
+
+// WithNTPServersForAllMachines sets NTP servers for all VSphereMachineConfigs.
+func WithNTPServersForAllMachines(servers []string) VSphereFiller {
+	return func(config VSphereConfig) {
+		for _, m := range config.machineConfigs {
+			if m.Spec.HostOSConfiguration == nil {
+				m.Spec.HostOSConfiguration = &anywherev1.HostOSConfiguration{}
+			}
+			if m.Spec.HostOSConfiguration.NTPConfiguration == nil {
+				m.Spec.HostOSConfiguration.NTPConfiguration = &anywherev1.NTPConfiguration{}
+			}
+			m.Spec.HostOSConfiguration.NTPConfiguration.Servers = servers
+		}
+	}
+}
+
+// WithBottlerocketConfigurationForAllMachines sets Bottlerocket configuration for all VSphereMachineConfigs.
+func WithBottlerocketConfigurationForAllMachines(value *anywherev1.BottlerocketConfiguration) VSphereFiller {
+	return func(config VSphereConfig) {
+		for _, m := range config.machineConfigs {
+			if m.Spec.HostOSConfiguration == nil {
+				m.Spec.HostOSConfiguration = &anywherev1.HostOSConfiguration{}
+			}
+			m.Spec.HostOSConfiguration.BottlerocketConfiguration = value
+		}
+	}
+}
+
 func WithVSphereStringFromEnvVar(envVar string, opt func(string) VSphereFiller) VSphereFiller {
 	return opt(os.Getenv(envVar))
 }
@@ -201,5 +244,16 @@ func WithVSphereMachineConfig(name string, fillers ...VSphereMachineConfigFiller
 		}
 
 		FillVSphereMachineConfig(m, fillers...)
+	}
+}
+
+// RemoveEtcdVsphereMachineConfig removes the etcd VSphereMachineConfig from the cluster spec.
+func RemoveEtcdVsphereMachineConfig() VSphereFiller {
+	return func(config VSphereConfig) {
+		for k, m := range config.machineConfigs {
+			if strings.HasSuffix(m.Name, "-etcd") {
+				delete(config.machineConfigs, k)
+			}
+		}
 	}
 }

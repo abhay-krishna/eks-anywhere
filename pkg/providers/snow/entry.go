@@ -11,6 +11,7 @@ type ConfigManager struct {
 	defaulters *Defaulters
 }
 
+// NewConfigManager returns a new snow config manager.
 func NewConfigManager(defaulters *Defaulters, validators *Validator) *ConfigManager {
 	return &ConfigManager{
 		validator:  validators,
@@ -39,18 +40,13 @@ func (cm *ConfigManager) snowEntry(ctx context.Context) *cluster.ConfigManagerEn
 	return &cluster.ConfigManagerEntry{
 		Defaulters: []cluster.Defaulter{
 			func(c *cluster.Config) error {
-				return cm.defaulters.GenerateDefaultSshKeys(ctx, c.SnowMachineConfigs)
+				return cm.defaulters.GenerateDefaultSSHKeys(ctx, c.SnowMachineConfigs, c.Cluster.Name)
+			},
+			func(c *cluster.Config) error {
+				return SetupEksaCredentialsSecret(c)
 			},
 		},
 		Validations: []cluster.Validation{
-			func(c *cluster.Config) error {
-				for _, m := range c.SnowMachineConfigs {
-					if err := cm.validator.ValidateMachineDeviceIPs(ctx, m); err != nil {
-						return err
-					}
-				}
-				return nil
-			},
 			func(c *cluster.Config) error {
 				for _, m := range c.SnowMachineConfigs {
 					if err := cm.validator.ValidateEC2ImageExistsOnDevice(ctx, m); err != nil {
@@ -66,6 +62,33 @@ func (cm *ConfigManager) snowEntry(ctx context.Context) *cluster.ConfigManagerEn
 					}
 				}
 				return nil
+			},
+			func(c *cluster.Config) error {
+				for _, m := range c.SnowMachineConfigs {
+					if err := cm.validator.ValidateDeviceIsUnlocked(ctx, m); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			func(c *cluster.Config) error {
+				for _, m := range c.SnowMachineConfigs {
+					if err := cm.validator.ValidateInstanceType(ctx, m); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			func(c *cluster.Config) error {
+				for _, m := range c.SnowMachineConfigs {
+					if err := cm.validator.ValidateDeviceSoftware(ctx, m); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			func(c *cluster.Config) error {
+				return cm.validator.ValidateControlPlaneIP(ctx, c.Cluster.Spec.ControlPlaneConfiguration.Endpoint.Host)
 			},
 		},
 	}

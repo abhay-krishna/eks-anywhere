@@ -9,25 +9,7 @@ import (
 )
 
 const (
-	bottlerocketNetplan = `# Version is required, it will change as we support
-# additional settings
-version = 1
-
-# "eno1" is the interface name
-# Users may turn on dhcp4 and dhcp6 via boolean
-[eno1]
-dhcp4 = true
-# Define this interface as the "primary" interface
-# for the system.  This IP is what kubelet will use
-# as the node IP.  If none of the interfaces has
-# "primary" set, we choose the first interface in
-# the file
-primary = true
-`
-	bottlerocketBootconfig = `kernel {
-  console = "tty0", "ttyS0,115200n8"
-}
-`
+	bottlerocketBootconfig = `kernel {}`
 
 	cloudInit = `datasource:
   Ec2:
@@ -39,75 +21,102 @@ warnings:
 `
 )
 
-func getDiskPart(disk string) string {
-	switch {
-	case strings.Contains(disk, "nvme"):
-		return fmt.Sprintf("%sp", disk)
-	default:
-		return disk
-	}
-}
-
-func GetDefaultActionsFromBundle(b v1alpha1.VersionsBundle, disk, osImageOverride, tinkerbellLocalIp, tinkerbellLBIp string, osFamily OSFamily) []ActionOpt {
-	var diskPart string
-
-	defaultActions := []ActionOpt{
-		withStreamImageAction(b, disk, osImageOverride, osFamily),
-	}
-
+// GetDefaultActionsFromBundle constructs a set of default actions for the given osFamily using the
+// bundle as the source of action images.
+func GetDefaultActionsFromBundle(clusterSpec *Cluster, b v1alpha1.VersionsBundle, osImageOverride, tinkerbellLocalIP, tinkerbellLBIP string, osFamily OSFamily) []ActionOpt {
 	// The metadata string will have two URLs:
-	// - one that will be used initially for bootstrap and will point to hegel running on kind
-	// - the other will be used when the workload cluster is up and  will point to hegel running on the workload cluster
-	metadataUrls := fmt.Sprintf("http://%s:50061,http://%s:50061", tinkerbellLocalIp, tinkerbellLBIp)
+	// 1. one that will be used initially for bootstrap and will point to hegel running on kind.
+	// 2. one that will be used when the workload cluster is up and will point to hegel running on
+	//    the workload cluster.
+	metadataURLs := []string{
+		fmt.Sprintf("http://%s:50061", tinkerbellLocalIP),
+		fmt.Sprintf("http://%s:50061", tinkerbellLBIP),
+	}
 
-	if osFamily == Bottlerocket {
-		diskPart = fmt.Sprintf("%s12", getDiskPart(disk))
-		defaultActions = append(defaultActions,
-			withNetplanAction(b, diskPart, osFamily),
-			withBottlerocketBootconfigAction(b, diskPart),
-			withBottlerocketUserDataAction(b, diskPart, metadataUrls),
+	additionalEnvVar := make(map[string]string)
+
+	if clusterSpec.Spec.ProxyConfiguration != nil {
+		proxyConfig := clusterSpec.ProxyConfiguration()
+		additionalEnvVar["HTTP_PROXY"] = proxyConfig["HTTP_PROXY"]
+		additionalEnvVar["HTTPS_PROXY"] = proxyConfig["HTTPS_PROXY"]
+
+		noProxy := fmt.Sprintf("%s,%s", tinkerbellLocalIP, tinkerbellLBIP)
+		if proxyConfig["NO_PROXY"] != "" {
+			noProxy = fmt.Sprintf("%s,%s", proxyConfig["NO_PROXY"], noProxy)
+		}
+
+		additionalEnvVar["NO_PROXY"] = noProxy
+	}
+	// During workflow reconciliation when the Tinkerbell template is rendered, the Workflow
+	// Controller injects a subset of data from the Hardware resource. This lets us use Go template
+	// language to render the disks enabling mix'n'match disk types for templates that represent
+	// the same kind of machine such as control plane nodes.
+	//
+	// The devicePath disk index and the storagePartitionPath disk index should match.
+	devicePath := "{{ index .Hardware.Disks 0 }}"
+	paritionPathFmt := "{{ formatPartition ( index .Hardware.Disks 0 ) %s }}"
+
+	actions := []ActionOpt{withStreamImageAction(b, devicePath, osImageOverride, additionalEnvVar)}
+
+	switch osFamily {
+	case Bottlerocket:
+		partitionPath := fmt.Sprintf(paritionPathFmt, "12")
+
+		actions = append(actions,
+			withBottlerocketBootconfigAction(b, partitionPath),
+			withBottlerocketUserDataAction(b, partitionPath, strings.Join(metadataURLs, ",")),
+			// Order matters. This action needs to append to an existing user-data.toml file so
+			// must be after withBottlerocketUserDataAction().
+			withNetplanAction(b, partitionPath, osFamily),
 			withRebootAction(b),
 		)
-	} else {
-		diskPart = fmt.Sprintf("%s2", getDiskPart(disk))
-		defaultActions = append(defaultActions,
-			withNetplanAction(b, diskPart, osFamily),
-			withDisableCloudInitNetworkCapabilities(b, diskPart),
-			withTinkCloudInitAction(b, diskPart, metadataUrls),
-			withDsCloudInitAction(b, diskPart),
-		)
-		if strings.Contains(disk, "nvme") {
-			defaultActions = append(defaultActions, withRebootAction(b))
-		} else {
-			defaultActions = append(defaultActions, withKexecAction(b, diskPart))
+	case RedHat:
+		var mu []string
+		for _, u := range metadataURLs {
+			mu = append(mu, fmt.Sprintf("'%s'", u))
 		}
+
+		partitionPath := fmt.Sprintf(paritionPathFmt, "1")
+
+		actions = append(actions,
+			withNetplanAction(b, partitionPath, osFamily),
+			withDisableCloudInitNetworkCapabilities(b, partitionPath),
+			withTinkCloudInitAction(b, partitionPath, strings.Join(mu, ",")),
+			withDsCloudInitAction(b, partitionPath),
+			withRebootAction(b),
+		)
+	default:
+		partitionPath := fmt.Sprintf(paritionPathFmt, "2")
+
+		actions = append(actions,
+			withNetplanAction(b, partitionPath, osFamily),
+			withDisableCloudInitNetworkCapabilities(b, partitionPath),
+			withTinkCloudInitAction(b, partitionPath, strings.Join(metadataURLs, ",")),
+			withDsCloudInitAction(b, partitionPath),
+			withRebootAction(b),
+		)
 	}
 
-	return defaultActions
+	return actions
 }
 
-func withStreamImageAction(b v1alpha1.VersionsBundle, disk, osImageOverride string, osFamily OSFamily) ActionOpt {
+func withStreamImageAction(b v1alpha1.VersionsBundle, disk, imageURL string, additionalEnvVar map[string]string) ActionOpt {
 	return func(a *[]tinkerbell.Action) {
-		var imageUrl string
+		env := map[string]string{
+			"DEST_DISK":  disk,
+			"IMG_URL":    imageURL,
+			"COMPRESSED": "true",
+		}
 
-		switch {
-		case osImageOverride != "":
-			imageUrl = osImageOverride
-		case osFamily == Bottlerocket:
-			imageUrl = b.EksD.Raw.Bottlerocket.URI
-		default:
-			imageUrl = b.EksD.Raw.Ubuntu.URI
+		for k, v := range additionalEnvVar {
+			env[k] = v
 		}
 
 		*a = append(*a, tinkerbell.Action{
-			Name:    "stream-image",
-			Image:   b.Tinkerbell.TinkerbellStack.Actions.ImageToDisk.URI,
-			Timeout: 600,
-			Environment: map[string]string{
-				"DEST_DISK":  disk,
-				"IMG_URL":    imageUrl,
-				"COMPRESSED": "true",
-			},
+			Name:        "stream-image",
+			Image:       b.Tinkerbell.TinkerbellStack.Actions.ImageToDisk.URI,
+			Timeout:     600,
+			Environment: env,
 		})
 	}
 }
@@ -133,7 +142,8 @@ func withNetplanAction(b v1alpha1.VersionsBundle, disk string, osFamily OSFamily
 		if osFamily == Bottlerocket {
 			// Bottlerocket needs to write onto the 12th partition as opposed to 2nd for non-Bottlerocket OS
 			netplanAction.Environment["DEST_PATH"] = "/net.toml"
-			netplanAction.Environment["CONTENTS"] = bottlerocketNetplan
+			netplanAction.Environment["STATIC_BOTTLEROCKET"] = "true"
+			netplanAction.Environment["IFNAME"] = "eno1"
 		} else {
 			netplanAction.Environment["STATIC_NETPLAN"] = "true"
 		}
@@ -161,7 +171,7 @@ func withDisableCloudInitNetworkCapabilities(b v1alpha1.VersionsBundle, disk str
 	}
 }
 
-func withTinkCloudInitAction(b v1alpha1.VersionsBundle, disk string, metadataUrls string) ActionOpt {
+func withTinkCloudInitAction(b v1alpha1.VersionsBundle, disk string, metadataURLs string) ActionOpt {
 	return func(a *[]tinkerbell.Action) {
 		*a = append(*a, tinkerbell.Action{
 			Name:    "add-tink-cloud-init-config",
@@ -171,7 +181,7 @@ func withTinkCloudInitAction(b v1alpha1.VersionsBundle, disk string, metadataUrl
 				"DEST_DISK": disk,
 				"FS_TYPE":   "ext4",
 				"DEST_PATH": "/etc/cloud/cloud.cfg.d/10_tinkerbell.cfg",
-				"CONTENTS":  fmt.Sprintf(cloudInit, metadataUrls),
+				"CONTENTS":  fmt.Sprintf(cloudInit, metadataURLs),
 				"UID":       "0",
 				"GID":       "0",
 				"MODE":      "0600",
@@ -196,21 +206,6 @@ func withDsCloudInitAction(b v1alpha1.VersionsBundle, disk string) ActionOpt {
 				"GID":       "0",
 				"MODE":      "0600",
 				"DIRMODE":   "0700",
-			},
-		})
-	}
-}
-
-func withKexecAction(b v1alpha1.VersionsBundle, disk string) ActionOpt {
-	return func(a *[]tinkerbell.Action) {
-		*a = append(*a, tinkerbell.Action{
-			Name:    "kexec-image",
-			Image:   b.Tinkerbell.TinkerbellStack.Actions.Kexec.URI,
-			Timeout: 90,
-			Pid:     "host",
-			Environment: map[string]string{
-				"BLOCK_DEVICE": disk,
-				"FS_TYPE":      "ext4",
 			},
 		})
 	}
@@ -249,7 +244,7 @@ func withBottlerocketBootconfigAction(b v1alpha1.VersionsBundle, disk string) Ac
 	}
 }
 
-func withBottlerocketUserDataAction(b v1alpha1.VersionsBundle, disk string, metadataUrls string) ActionOpt {
+func withBottlerocketUserDataAction(b v1alpha1.VersionsBundle, disk string, metadataURLs string) ActionOpt {
 	return func(a *[]tinkerbell.Action) {
 		*a = append(*a, tinkerbell.Action{
 			Name:    "write-user-data",
@@ -260,7 +255,7 @@ func withBottlerocketUserDataAction(b v1alpha1.VersionsBundle, disk string, meta
 				"DEST_DISK":  disk,
 				"FS_TYPE":    "ext4",
 				"DEST_PATH":  "/user-data.toml",
-				"HEGEL_URLS": metadataUrls,
+				"HEGEL_URLS": metadataURLs,
 				"UID":        "0",
 				"GID":        "0",
 				"MODE":       "0644",

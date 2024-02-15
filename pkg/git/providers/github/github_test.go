@@ -3,7 +3,7 @@ package github_test
 import (
 	"context"
 	"fmt"
-	"os"
+	"math/rand"
 	"reflect"
 	"testing"
 
@@ -17,9 +17,7 @@ import (
 	"github.com/aws/eks-anywhere/pkg/git/providers/github/mocks"
 )
 
-const (
-	validPATValue = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-)
+var validPATValues = []string{"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", "github_pat_abcdefghijklmnopqrstuv_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456"}
 
 func TestValidate(t *testing.T) {
 	tests := []struct {
@@ -69,6 +67,7 @@ func TestValidate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.testName, func(t *testing.T) {
 			mockCtrl := gomock.NewController(t)
+			validPATValue := validPATValues[rand.Intn(len(validPATValues))]
 
 			ctx := context.Background()
 			githubproviderclient := mocks.NewMockGithubClient(mockCtrl)
@@ -107,29 +106,14 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-type testContext struct {
-	oldGithubToken   string
-	isGithubTokenSet bool
-}
-
-func (tctx *testContext) SaveContext(token string) {
-	tctx.oldGithubToken, tctx.isGithubTokenSet = os.LookupEnv(github.EksaGithubTokenEnv)
-	os.Setenv(github.EksaGithubTokenEnv, token)
-	os.Setenv(github.GithubTokenEnv, token)
-}
-
-func (tctx *testContext) RestoreContext() {
-	if tctx.isGithubTokenSet {
-		os.Setenv(github.EksaGithubTokenEnv, tctx.oldGithubToken)
-	} else {
-		os.Unsetenv(github.EksaGithubTokenEnv)
-	}
+func setupContext(t *testing.T) {
+	validPATValue := validPATValues[rand.Intn(len(validPATValues))]
+	t.Setenv(github.EksaGithubTokenEnv, validPATValue)
+	t.Setenv(github.GithubTokenEnv, validPATValue)
 }
 
 func TestIsGithubAccessTokenValidWithEnv(t *testing.T) {
-	var tctx testContext
-	tctx.SaveContext(validPATValue)
-	defer tctx.RestoreContext()
+	setupContext(t)
 
 	tests := []struct {
 		testName string
@@ -186,6 +170,7 @@ func TestGetRepoSucceeds(t *testing.T) {
 				Personal:   tt.personal,
 			}
 
+			validPATValue := validPATValues[rand.Intn(len(validPATValues))]
 			auth := git.TokenAuth{Token: validPATValue, Username: tt.owner}
 			githubProvider, err := github.New(githubproviderclient, config, auth)
 			if err != nil {
@@ -240,6 +225,7 @@ func TestGetNonExistantRepoSucceeds(t *testing.T) {
 				Personal:   tt.personal,
 			}
 
+			validPATValue := validPATValues[rand.Intn(len(validPATValues))]
 			auth := git.TokenAuth{Token: validPATValue, Username: tt.owner}
 			githubProvider, err := github.New(githubproviderclient, config, auth)
 			if err != nil {

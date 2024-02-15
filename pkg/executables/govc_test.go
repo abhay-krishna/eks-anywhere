@@ -3,19 +3,20 @@ package executables_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"io/ioutil"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/onsi/gomega"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	. "github.com/onsi/gomega"
 
 	"github.com/aws/eks-anywhere/internal/test"
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
@@ -28,6 +29,7 @@ const (
 	govcUsername       = "GOVC_USERNAME"
 	govcPassword       = "GOVC_PASSWORD"
 	govcURL            = "GOVC_URL"
+	govcDatacenter     = "GOVC_DATACENTER"
 	govcInsecure       = "GOVC_INSECURE"
 	vSphereUsername    = "EKSA_VSPHERE_USERNAME"
 	vSpherePassword    = "EKSA_VSPHERE_PASSWORD"
@@ -37,66 +39,30 @@ const (
 )
 
 var govcEnvironment = map[string]string{
-	govcUsername: "vsphere_username",
-	govcPassword: "vsphere_password",
-	govcURL:      "vsphere_server",
-	govcInsecure: "false",
-}
-
-type testContext struct {
-	oldUsername   string
-	isUsernameSet bool
-	oldPassword   string
-	isPasswordSet bool
-	oldServer     string
-	isServerSet   bool
-}
-
-func (tctx *testContext) SaveContext() {
-	tctx.oldUsername, tctx.isUsernameSet = os.LookupEnv(vSphereUsername)
-	tctx.oldPassword, tctx.isPasswordSet = os.LookupEnv(vSpherePassword)
-	tctx.oldServer, tctx.isServerSet = os.LookupEnv(vSphereServer)
-	os.Setenv(vSphereUsername, "vsphere_username")
-	os.Setenv(vSpherePassword, "vsphere_password")
-	os.Setenv(vSphereServer, "vsphere_server")
-	os.Setenv(govcUsername, os.Getenv(vSphereUsername))
-	os.Setenv(govcPassword, os.Getenv(vSpherePassword))
-	os.Setenv(govcURL, os.Getenv(vSphereServer))
-	os.Setenv(govcInsecure, "false")
-}
-
-func (tctx *testContext) RestoreContext() {
-	if tctx.isUsernameSet {
-		os.Setenv(vSphereUsername, tctx.oldUsername)
-	} else {
-		os.Unsetenv(vSphereUsername)
-	}
-	if tctx.isPasswordSet {
-		os.Setenv(vSpherePassword, tctx.oldPassword)
-	} else {
-		os.Unsetenv(vSpherePassword)
-	}
-	if tctx.isServerSet {
-		os.Setenv(vSphereServer, tctx.oldServer)
-	} else {
-		os.Unsetenv(vSphereServer)
-	}
+	govcUsername:   "vsphere_username",
+	govcPassword:   "vsphere_password",
+	govcURL:        "vsphere_server",
+	govcDatacenter: "vsphere_datacenter",
+	govcInsecure:   "false",
 }
 
 func setupContext(t *testing.T) {
-	var tctx testContext
-	tctx.SaveContext()
-	t.Cleanup(func() {
-		tctx.RestoreContext()
-	})
+	t.Setenv(vSphereUsername, "vsphere_username")
+	t.Setenv(vSpherePassword, "vsphere_password")
+	t.Setenv(vSphereServer, "vsphere_server")
+	t.Setenv(govcUsername, os.Getenv(vSphereUsername))
+	t.Setenv(govcPassword, os.Getenv(vSpherePassword))
+	t.Setenv(govcURL, os.Getenv(vSphereServer))
+	t.Setenv(govcInsecure, "false")
+	t.Setenv(govcDatacenter, "vsphere_datacenter")
 }
 
-func setup(t *testing.T) (dir string, govc *executables.Govc, mockExecutable *mockexecutables.MockExecutable, env map[string]string) {
+func setup(t *testing.T, opts ...executables.GovcOpt) (dir string, govc *executables.Govc, mockExecutable *mockexecutables.MockExecutable, env map[string]string) {
 	setupContext(t)
 	dir, writer := test.NewWriter(t)
 	mockCtrl := gomock.NewController(t)
 	executable := mockexecutables.NewMockExecutable(mockCtrl)
-	g := executables.NewGovc(executable, writer)
+	g := executables.NewGovc(executable, writer, opts...)
 
 	return dir, g, executable, govcEnvironment
 }
@@ -115,6 +81,8 @@ type deployTemplateTest struct {
 	deployFolder             string
 	templateInLibraryPathAbs string
 	templateName             string
+	diskName                 string
+	diskSize                 int
 	resizeDisk2              bool
 	ctx                      context.Context
 	fakeExecResponse         *bytes.Buffer
@@ -141,20 +109,8 @@ func newDeployTemplateTest(t *testing.T) *deployTemplateTest {
 		ctx:                      context.Background(),
 		fakeExecResponse:         bytes.NewBufferString("dummy"),
 		expectations:             make([]*gomock.Call, 0),
-	}
-}
-
-func newMachineConfig(t *testing.T) *v1alpha1.VSphereMachineConfig {
-	return &v1alpha1.VSphereMachineConfig{
-		TypeMeta: metav1.TypeMeta{
-			Kind: v1alpha1.VSphereMachineConfigKind,
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "eksa-unit-test",
-		},
-		Spec: v1alpha1.VSphereMachineConfigSpec{
-			Template: "/SDDC-Datacenter/vm/Templates/ubuntu-v1.19.8-eks-d-1-19-4-eks-a-0.0.1.build.38-amd64",
-		},
+		diskName:                 "disk-31000-1",
+		diskSize:                 20,
 	}
 }
 
@@ -169,6 +125,20 @@ func (dt *deployTemplateTest) expectDeployToReturn(err error) {
 	dt.expectations = append(
 		dt.expectations,
 		dt.mockExecutable.EXPECT().ExecuteWithEnv(dt.ctx, dt.env, "library.deploy", "-dc", dt.datacenter, "-ds", dt.datastore, "-pool", dt.resourcePool, "-folder", dt.deployFolder, "-options", test.OfType("string"), dt.templateInLibraryPathAbs, dt.templateName).Return(*dt.fakeExecResponse, err),
+	)
+}
+
+func (dt *deployTemplateTest) expectDevicesInfoToReturn(err error) {
+	dt.expectations = append(
+		dt.expectations,
+		dt.mockExecutable.EXPECT().ExecuteWithEnv(dt.ctx, dt.env, "device.info", "-dc", dt.datacenter, "-vm", dt.templateName, "-json").Return(*dt.fakeExecResponse, err),
+	)
+}
+
+func (dt *deployTemplateTest) expectResizeDiskToReturn(err error) {
+	dt.expectations = append(
+		dt.expectations,
+		dt.mockExecutable.EXPECT().ExecuteWithEnv(dt.ctx, dt.env, "vm.disk.change", "-dc", dt.datacenter, "-vm", dt.templateName, "-disk.name", dt.diskName, "-size", strconv.Itoa(dt.diskSize)+"G").Return(*dt.fakeExecResponse, err),
 	)
 }
 
@@ -204,47 +174,46 @@ func (dt *deployTemplateTest) assertDeployTemplateError(t *testing.T) {
 }
 
 func (dt *deployTemplateTest) assertDeployOptsMatches(t *testing.T) {
-	g := gomega.NewWithT(t)
+	g := NewWithT(t)
 
-	actual, err := ioutil.ReadFile(filepath.Join(dt.dir, executables.DeployOptsFile))
+	actual, err := os.ReadFile(filepath.Join(dt.dir, executables.DeployOptsFile))
 	if err != nil {
 		t.Fatalf("failed to read deploy options file: %v", err)
 	}
 
-	g.Expect(string(actual)).To(gomega.Equal(expectedDeployOpts))
+	g.Expect(string(actual)).To(Equal(expectedDeployOpts))
 }
 
 func TestSearchTemplateItExists(t *testing.T) {
 	ctx := context.Background()
+	template := "my-template"
 	datacenter := "SDDC-Datacenter"
 
 	_, g, executable, env := setup(t)
-	machineConfig := newMachineConfig(t)
-	machineConfig.Spec.Template = "/SDDC Datacenter/vm/Templates/ubuntu 2004-kube-v1.19.6"
-	executable.EXPECT().ExecuteWithEnv(ctx, env, "find", "-json", "/"+datacenter, "-type", "VirtualMachine", "-name", filepath.Base(machineConfig.Spec.Template)).Return(*bytes.NewBufferString("[\"/SDDC Datacenter/vm/Templates/ubuntu 2004-kube-v1.19.6\"]"), nil)
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "find", "-json", "/"+datacenter, "-type", "VirtualMachine", "-name", filepath.Base(template)).Return(*bytes.NewBufferString("[\"/SDDC Datacenter/vm/Templates/ubuntu 2004-kube-v1.19.6\"]"), nil)
 
-	_, err := g.SearchTemplate(ctx, datacenter, machineConfig)
+	_, err := g.SearchTemplate(ctx, datacenter, template)
 	if err != nil {
 		t.Fatalf("Govc.SearchTemplate() exists = false, want true %v", err)
 	}
 }
 
 func TestSearchTemplateItDoesNotExists(t *testing.T) {
-	machineConfig := newMachineConfig(t)
+	template := "my-template"
 	ctx := context.Background()
 	datacenter := "SDDC-Datacenter"
 
 	_, g, executable, env := setup(t)
-	executable.EXPECT().ExecuteWithEnv(ctx, env, "find", "-json", "/"+datacenter, "-type", "VirtualMachine", "-name", filepath.Base(machineConfig.Spec.Template)).Return(*bytes.NewBufferString(""), nil)
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "find", "-json", "/"+datacenter, "-type", "VirtualMachine", "-name", filepath.Base(template)).Return(*bytes.NewBufferString(""), nil)
 
-	templateFullPath, err := g.SearchTemplate(ctx, datacenter, machineConfig)
+	templateFullPath, err := g.SearchTemplate(ctx, datacenter, template)
 	if err == nil && len(templateFullPath) > 0 {
 		t.Fatalf("Govc.SearchTemplate() exists = true, want false %v", err)
 	}
 }
 
 func TestSearchTemplateError(t *testing.T) {
-	machineConfig := newMachineConfig(t)
+	template := "my-template"
 	ctx := context.Background()
 	datacenter := "SDDC-Datacenter"
 
@@ -252,7 +221,7 @@ func TestSearchTemplateError(t *testing.T) {
 	g.Retrier = retrier.NewWithMaxRetries(5, 0)
 	executable.EXPECT().ExecuteWithEnv(ctx, env, gomock.Any()).Return(bytes.Buffer{}, errors.New("error from execute with env")).Times(5)
 
-	_, err := g.SearchTemplate(ctx, datacenter, machineConfig)
+	_, err := g.SearchTemplate(ctx, datacenter, template)
 	if err == nil {
 		t.Fatal("Govc.SearchTemplate() err = nil, want err not nil")
 	}
@@ -366,9 +335,7 @@ func TestGovcTemplateHasSnapshot(t *testing.T) {
 	ctx := context.Background()
 	mockCtrl := gomock.NewController(t)
 
-	var tctx testContext
-	tctx.SaveContext()
-	defer tctx.RestoreContext()
+	setupContext(t)
 
 	executable := mockexecutables.NewMockExecutable(mockCtrl)
 	params := []string{"snapshot.tree", "-vm", template}
@@ -406,9 +373,7 @@ func TestGovcGetWorkloadAvailableSpace(t *testing.T) {
 			ctx := context.Background()
 			mockCtrl := gomock.NewController(t)
 
-			var tctx testContext
-			tctx.SaveContext()
-			defer tctx.RestoreContext()
+			setupContext(t)
 
 			executable := mockexecutables.NewMockExecutable(mockCtrl)
 			params := []string{"datastore.info", "-json=true", datastore}
@@ -430,6 +395,42 @@ func TestDeployTemplateFromLibrarySuccess(t *testing.T) {
 	tt := newDeployTemplateTest(t)
 	tt.expectFolderInfoToReturn(nil)
 	tt.expectDeployToReturn(nil)
+	tt.expectCreateSnapshotToReturn(nil)
+	tt.expectMarkAsTemplateToReturn(nil)
+
+	tt.assertDeployTemplateSuccess(t)
+	tt.assertDeployOptsMatches(t)
+}
+
+func TestDeployTemplateFromLibraryResizeBRSuccess(t *testing.T) {
+	tt := newDeployTemplateTest(t)
+	tt.resizeDisk2 = true
+	response := map[string][]interface{}{
+		"Devices": {
+			map[string]interface{}{
+				"Name": "disk-31000-0",
+				"DeviceInfo": map[string]string{
+					"Label": "Hard disk 1",
+				},
+			},
+			map[string]interface{}{
+				"Name": "disk-31000-1",
+				"DeviceInfo": map[string]string{
+					"Label": "Hard disk 2",
+				},
+			},
+		},
+	}
+	mashaledResponse, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("failed to marshal response: %v", err)
+	}
+	responseBytes := bytes.NewBuffer(mashaledResponse)
+	tt.fakeExecResponse = responseBytes
+	tt.expectFolderInfoToReturn(nil)
+	tt.expectDeployToReturn(nil)
+	tt.expectDevicesInfoToReturn(nil)
+	tt.expectResizeDiskToReturn(nil)
 	tt.expectCreateSnapshotToReturn(nil)
 	tt.expectMarkAsTemplateToReturn(nil)
 
@@ -485,9 +486,7 @@ func TestGovcValidateVCenterSetupMachineConfig(t *testing.T) {
 	_, writer := test.NewWriter(t)
 	selfSigned := true
 
-	var tctx testContext
-	tctx.SaveContext()
-	defer tctx.RestoreContext()
+	setupContext(t)
 
 	executable := mockexecutables.NewMockExecutable(mockCtrl)
 
@@ -533,14 +532,12 @@ func TestGovcCleanupVms(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	_, writer := test.NewWriter(t)
 
-	var tctx testContext
-	tctx.SaveContext()
-	defer tctx.RestoreContext()
+	setupContext(t)
 
 	executable := mockexecutables.NewMockExecutable(mockCtrl)
 
 	var params []string
-	params = []string{"find", "-type", "VirtualMachine", "-name", clusterName + "*"}
+	params = []string{"find", "/" + env[govcDatacenter], "-type", "VirtualMachine", "-name", clusterName + "*"}
 	executable.EXPECT().ExecuteWithEnv(ctx, env, params).Return(*bytes.NewBufferString(clusterName), nil)
 
 	params = []string{"vm.power", "-off", "-force", vmName}
@@ -681,7 +678,19 @@ func TestListTagsSuccessHasTags(t *testing.T) {
 			"category_id": "kubernetesChannel"
 		}
 	]`
-	wantTags := []string{"eksd:1.19-4", "kubernetesChannel:1.19"}
+
+	wantTags := []executables.Tag{
+		{
+			Name:       "eksd:1.19-4",
+			Id:         "urn:vmomi:InventoryServiceTag:5555:GLOBAL",
+			CategoryId: "eksd",
+		},
+		{
+			Name:       "kubernetesChannel:1.19",
+			Id:         "urn:vmomi:InventoryServiceTag:5555:GLOBAL",
+			CategoryId: "kubernetesChannel",
+		},
+	}
 
 	_, g, executable, env := setup(t)
 	executable.EXPECT().ExecuteWithEnv(ctx, env, "tags.ls", "-json").Return(*bytes.NewBufferString(tagsReponse), nil)
@@ -731,6 +740,28 @@ func TestAddTagSuccess(t *testing.T) {
 	err := g.AddTag(ctx, path, tag)
 	if err != nil {
 		t.Fatalf("Govc.AddTag() err = %v, want err nil", err)
+	}
+}
+
+func TestEnvMapOverride(t *testing.T) {
+	category := "category"
+	tag := "tag"
+	ctx := context.Background()
+
+	envOverride := map[string]string{
+		govcUsername:   "override_vsphere_username",
+		govcPassword:   "override_vsphere_password",
+		govcURL:        "override_vsphere_server",
+		govcDatacenter: "override_vsphere_datacenter",
+		govcInsecure:   "false",
+	}
+
+	_, g, executable, _ := setup(t, executables.WithGovcEnvMap(envOverride))
+	executable.EXPECT().ExecuteWithEnv(ctx, envOverride, "tags.create", "-c", category, tag).Return(*bytes.NewBufferString(""), nil)
+
+	err := g.CreateTag(ctx, tag, category)
+	if err != nil {
+		t.Fatalf("Govc.CreateTag() with envMap override err = %v, want err nil", err)
 	}
 }
 
@@ -995,6 +1026,17 @@ func TestGovcValidateVCenterAuthenticationSuccess(t *testing.T) {
 	}
 }
 
+func TestGovcValidateVCenterAuthenticationErrorNoDatacenter(t *testing.T) {
+	ctx := context.Background()
+	_, g, _, _ := setup(t)
+
+	t.Setenv(govcDatacenter, "")
+
+	if err := g.ValidateVCenterAuthentication(ctx); err == nil {
+		t.Fatal("Govc.ValidateVCenterAuthentication() err = nil, want err not nil")
+	}
+}
+
 func TestGovcIsCertSelfSignedTrue(t *testing.T) {
 	ctx := context.Background()
 	_, g, executable, env := setup(t)
@@ -1137,5 +1179,546 @@ func TestGovcNetworkExistsFalse(t *testing.T) {
 
 	if exists {
 		t.Fatalf("Govc.NetworkExists() = true, want false")
+	}
+}
+
+func TestGovcCreateUser(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	username := "ralph"
+	password := "verysecret"
+
+	tests := []struct {
+		name    string
+		wantErr error
+	}{
+		{
+			name:    "test CreateGroup success",
+			wantErr: nil,
+		},
+		{
+			name:    "test CreateGroup error",
+			wantErr: errors.New("operation failed"),
+		},
+	}
+
+	for _, tt := range tests {
+
+		executable.EXPECT().ExecuteWithEnv(ctx, env, "sso.user.create", "-p", password, username).Return(*bytes.NewBufferString(""), tt.wantErr)
+
+		err := g.CreateUser(ctx, username, password)
+		gt := NewWithT(t)
+
+		if tt.wantErr != nil {
+			gt.Expect(err).ToNot(BeNil())
+		} else {
+			gt.Expect(err).To(BeNil())
+		}
+	}
+}
+
+func TestGovcCreateGroup(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	group := "EKSA"
+
+	tests := []struct {
+		name    string
+		wantErr error
+	}{
+		{
+			name:    "test CreateGroup success",
+			wantErr: nil,
+		},
+		{
+			name:    "test CreateGroup error",
+			wantErr: errors.New("operation failed"),
+		},
+	}
+
+	for _, tt := range tests {
+
+		executable.EXPECT().ExecuteWithEnv(ctx, env, "sso.group.create", group).Return(*bytes.NewBufferString(""), tt.wantErr)
+
+		err := g.CreateGroup(ctx, group)
+		gt := NewWithT(t)
+		if tt.wantErr != nil {
+			gt.Expect(err).ToNot(BeNil())
+		} else {
+			gt.Expect(err).To(BeNil())
+		}
+
+	}
+}
+
+func TestGovcUserExistsFalse(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	username := "eksa"
+
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "sso.user.ls", username).Return(*bytes.NewBufferString(""), nil)
+
+	exists, err := g.UserExists(ctx, username)
+	gt := NewWithT(t)
+	gt.Expect(err).To(BeNil())
+	gt.Expect(exists).To(BeFalse())
+}
+
+func TestGovcUserExistsTrue(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	username := "eksa"
+
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "sso.user.ls", username).Return(*bytes.NewBufferString(username), nil)
+
+	exists, err := g.UserExists(ctx, username)
+	gt := NewWithT(t)
+	gt.Expect(err).To(BeNil())
+	gt.Expect(exists).To(BeTrue())
+}
+
+func TestGovcUserExistsError(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	username := "eksa"
+
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "sso.user.ls", username).Return(*bytes.NewBufferString(""), errors.New("operation failed"))
+
+	_, err := g.UserExists(ctx, username)
+	gt := NewWithT(t)
+	gt.Expect(err).ToNot(BeNil())
+}
+
+func TestGovcCreateRole(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	role := "EKSACloudAdmin"
+	privileges := []string{"vSphereDataProtection.Recovery", "vSphereDataProtection.Protection"}
+
+	tests := []struct {
+		name    string
+		wantErr error
+	}{
+		{
+			name:    "test CreateRole success",
+			wantErr: nil,
+		},
+		{
+			name:    "test CreateRole error",
+			wantErr: errors.New("operation failed"),
+		},
+	}
+
+	for _, tt := range tests {
+
+		targetArgs := append([]string{"role.create", role}, privileges...)
+		executable.EXPECT().ExecuteWithEnv(ctx, env, targetArgs).Return(*bytes.NewBufferString(""), tt.wantErr)
+
+		err := g.CreateRole(ctx, role, privileges)
+		gt := NewWithT(t)
+		if tt.wantErr != nil {
+			gt.Expect(err).ToNot(BeNil())
+		} else {
+			gt.Expect(err).To(BeNil())
+		}
+	}
+}
+
+func TestGovcGroupExistsFalse(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	group := "EKSA"
+
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "sso.group.ls", group).Return(*bytes.NewBufferString(""), nil)
+
+	exists, err := g.GroupExists(ctx, group)
+	gt := NewWithT(t)
+	gt.Expect(err).To(BeNil())
+	gt.Expect(exists).To(BeFalse())
+}
+
+func TestGovcGroupExistsTrue(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	group := "EKSA"
+
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "sso.group.ls", group).Return(*bytes.NewBufferString(group), nil)
+
+	exists, err := g.GroupExists(ctx, group)
+	gt := NewWithT(t)
+	gt.Expect(err).To(BeNil())
+	gt.Expect(exists).To(BeTrue())
+}
+
+func TestGovcGroupExistsError(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	group := "EKSA"
+
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "sso.group.ls", group).Return(*bytes.NewBufferString(""), errors.New("operation failed"))
+
+	_, err := g.GroupExists(ctx, group)
+	gt := NewWithT(t)
+	gt.Expect(err).ToNot(BeNil())
+}
+
+func TestGovcRoleExistsTrue(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	role := "EKSACloudAdmin"
+
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "role.ls", role).Return(*bytes.NewBufferString(role), nil)
+
+	exists, err := g.RoleExists(ctx, role)
+	gt := NewWithT(t)
+	gt.Expect(err).To(BeNil())
+	gt.Expect(exists).To(BeTrue())
+}
+
+func TestGovcRoleExistsFalse(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	role := "EKSACloudAdmin"
+
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "role.ls", role).Return(*bytes.NewBufferString(""), fmt.Errorf("role \"%s\" not found", role))
+
+	exists, err := g.RoleExists(ctx, role)
+	gt := NewWithT(t)
+	gt.Expect(err).To(BeNil())
+	gt.Expect(exists).To(BeFalse())
+}
+
+func TestGovcRoleExistsError(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	role := "EKSACloudAdmin"
+
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "role.ls", role).Return(*bytes.NewBufferString(""), errors.New("operation failed"))
+
+	_, err := g.RoleExists(ctx, role)
+	gt := NewWithT(t)
+	gt.Expect(err).ToNot(BeNil())
+}
+
+func TestGovcAddUserToGroup(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	group := "EKSA"
+	username := "ralph"
+
+	tests := []struct {
+		name    string
+		wantErr error
+	}{
+		{
+			name:    "test AddUserToGroup success",
+			wantErr: nil,
+		},
+		{
+			name:    "test AddUserToGroup error",
+			wantErr: errors.New("operation failed"),
+		},
+	}
+
+	for _, tt := range tests {
+
+		executable.EXPECT().ExecuteWithEnv(ctx, env, "sso.group.update", "-a", username, group).Return(*bytes.NewBufferString(""), tt.wantErr)
+
+		err := g.AddUserToGroup(ctx, group, username)
+		gt := NewWithT(t)
+		if tt.wantErr != nil {
+			gt.Expect(err).ToNot(BeNil())
+		} else {
+			gt.Expect(err).To(BeNil())
+		}
+
+	}
+}
+
+func TestGovcSetGroupRoleOnObject(t *testing.T) {
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	principal := "EKSAGroup"
+	domain := "vsphere.local"
+	role := "EKSACloudAdmin"
+	object := "/Datacenter/vm/MyVirtualMachines"
+
+	tests := []struct {
+		name    string
+		wantErr error
+	}{
+		{
+			name:    "test SetGroupRoleOnObject success",
+			wantErr: nil,
+		},
+		{
+			name:    "test SetGroupRoleOnObject error",
+			wantErr: errors.New("operation failed"),
+		},
+	}
+
+	for _, tt := range tests {
+		executable.EXPECT().ExecuteWithEnv(
+			ctx,
+			env,
+			"permissions.set",
+			"-group=true",
+			"-principal",
+			principal+"@"+domain,
+			"-role",
+			role,
+			object,
+		).Return(*bytes.NewBufferString(""), tt.wantErr)
+
+		err := g.SetGroupRoleOnObject(ctx, principal, role, object, domain)
+		gt := NewWithT(t)
+		if tt.wantErr != nil {
+			gt.Expect(err).ToNot(BeNil())
+		} else {
+			gt.Expect(err).To(BeNil())
+		}
+	}
+}
+
+func TestGovcGetVMDiskSizeInGB(t *testing.T) {
+	datacenter := "SDDC-Datacenter"
+	template := "bottlerocket-kube-v1.24.6"
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	gt := NewWithT(t)
+
+	response := map[string][]interface{}{
+		"Devices": {
+			map[string]interface{}{
+				"Name": "disk-31000-0",
+				"DeviceInfo": map[string]string{
+					"Label": "Hard disk 1",
+				},
+				"CapacityInKB": 25 * 1024 * 1024, // 25GB in KB
+			},
+		},
+	}
+
+	mashaledResponse, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("failed to marshal response: %v", err)
+	}
+	responseBytes := bytes.NewBuffer(mashaledResponse)
+
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "device.info", "-dc", datacenter, "-vm", template, "-json", "disk-*").Return(*responseBytes, nil)
+
+	size, err := g.GetVMDiskSizeInGB(ctx, template, datacenter)
+	gt.Expect(err).To(BeNil())
+	gt.Expect(size).To(Equal(25))
+}
+
+func TestGovcGetVMDiskSizeInGBError(t *testing.T) {
+	datacenter := "SDDC-Datacenter"
+	template := "bottlerocket-kube-v1.24.6"
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	govcErr := errors.New("error DevicesInfo()")
+
+	tests := []struct {
+		testName string
+		response map[string][]interface{}
+		govcErr  error
+		wantErr  error
+	}{
+		{
+			testName: "devices_info_govc_error",
+			response: nil,
+			govcErr:  govcErr,
+			wantErr:  fmt.Errorf("getting disk size for vm %s: getting template device information: %v", template, govcErr),
+		},
+		{
+			testName: "devices_info_no_devices",
+			response: map[string][]interface{}{
+				"Devices": {},
+			},
+			govcErr: nil,
+			wantErr: fmt.Errorf("no disks found for vm %s", template),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.testName, func(t *testing.T) {
+			gt := NewWithT(t)
+			mashaledResponse, err := json.Marshal(tt.response)
+			if err != nil {
+				t.Fatalf("failed to marshal response: %v", err)
+			}
+			responseBytes := bytes.NewBuffer(mashaledResponse)
+
+			executable.EXPECT().ExecuteWithEnv(ctx, env, "device.info", "-dc", datacenter, "-vm", template, "-json", "disk-*").Return(*responseBytes, tt.govcErr)
+
+			_, err = g.GetVMDiskSizeInGB(ctx, template, datacenter)
+			gt.Expect(err.Error()).To(Equal(tt.wantErr.Error()))
+		})
+	}
+}
+
+func TestGovcGetHardDiskSize(t *testing.T) {
+	datacenter := "SDDC-Datacenter"
+	template := "bottlerocket-kube-v1-21"
+	ctx := context.Background()
+	wantDiskMap := map[string]float64{
+		"Hard disk 1": 2097152,
+		"Hard disk 2": 20971520,
+	}
+	_, g, executable, env := setup(t)
+	gt := NewWithT(t)
+
+	response := map[string][]interface{}{
+		"Devices": {
+			map[string]interface{}{
+				"Name": "disk-31000-0",
+				"DeviceInfo": map[string]string{
+					"Label": "Hard disk 1",
+				},
+				"CapacityInKB": 2097152,
+			}, map[string]interface{}{
+				"Name": "disk-31000-1",
+				"DeviceInfo": map[string]string{
+					"Label": "Hard disk 2",
+				},
+				"CapacityInKB": 20971520,
+			},
+		},
+	}
+
+	marshaledResponse, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("failed to marshal response: %v", err)
+	}
+	responseBytes := bytes.NewBuffer(marshaledResponse)
+
+	executable.EXPECT().ExecuteWithEnv(ctx, env, "device.info", "-dc", datacenter, "-vm", template, "-json", "disk-*").Return(*responseBytes, nil)
+
+	diskSizeMap, err := g.GetHardDiskSize(ctx, template, datacenter)
+	gt.Expect(err).To(BeNil())
+	gt.Expect(diskSizeMap).To(Equal(wantDiskMap))
+}
+
+func TestGovcGetHardDiskSizeError(t *testing.T) {
+	datacenter := "SDDC-Datacenter"
+	template := "bottlerocket-kube-v1-21"
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+	govcErr := errors.New("error DevicesInfo()")
+
+	tests := []struct {
+		testName string
+		response map[string][]interface{}
+		govcErr  error
+		wantErr  error
+	}{
+		{
+			testName: "devices_info_govc_error",
+			response: nil,
+			govcErr:  govcErr,
+			wantErr:  fmt.Errorf("getting hard disk sizes for vm %s: getting template device information: %v", template, govcErr),
+		},
+		{
+			testName: "devices_info_no_devices",
+			response: map[string][]interface{}{
+				"Devices": {},
+			},
+			govcErr: nil,
+			wantErr: fmt.Errorf("no hard disks found for vm %s", template),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.testName, func(t *testing.T) {
+			gt := NewWithT(t)
+			marshaledResponse, err := json.Marshal(tt.response)
+			if err != nil {
+				t.Fatalf("failed to marshal response: %v", err)
+			}
+			responseBytes := bytes.NewBuffer(marshaledResponse)
+			executable.EXPECT().ExecuteWithEnv(ctx, env, "device.info", "-dc", datacenter, "-vm", template, "-json", "disk-*").Return(*responseBytes, tt.govcErr)
+			_, err = g.GetHardDiskSize(ctx, template, datacenter)
+			gt.Expect(err.Error()).To(Equal(tt.wantErr.Error()))
+		})
+	}
+}
+
+func TestGovcGetResourcePoolInfo(t *testing.T) {
+	datacenter := "SDDC-Datacenter"
+	resourcePool := "*/Resources/Test-ResourcePool"
+	govcErr := errors.New("error PoolInfo()")
+	ctx := context.Background()
+	_, g, executable, env := setup(t)
+
+	tests := []struct {
+		testName    string
+		response    string
+		govcErr     error
+		wantErr     error
+		wantMemInfo map[string]int
+	}{
+		{
+			testName: "pool_info_memory_limit_set",
+			response: `Name: Test-ResourcePool
+					Path: /SDDC-Datacenter/host/Cluster-1/Resources/Test-ResourcePool
+					Mem Usage: 100MB (11.3%)
+					Mem Shares: normal
+					Mem Reservation: 0MB (expandable=true)
+					Mem Limit: 1000MB`,
+			govcErr:     nil,
+			wantErr:     nil,
+			wantMemInfo: map[string]int{executables.MemoryAvailable: 900},
+		},
+		{
+			testName: "pool_info_memory_limit_unset",
+			response: `Name: Test-ResourcePool
+					Path: /SDDC-Datacenter/host/Cluster-1/Resources/Test-ResourcePool
+					Mem Usage: 100MB (11.3%)
+					Mem Shares: normal
+					Mem Reservation: 0MB (expandable=true)
+					Mem Limit: -1MB`,
+			govcErr:     nil,
+			wantErr:     nil,
+			wantMemInfo: map[string]int{executables.MemoryAvailable: -1},
+		},
+		{
+			testName: "pool_info_memory_usage_corrupt",
+			response: `Name: Test-ResourcePool
+					Mem Usage:corrupt-val
+					Mem Limit:-1MB`,
+			govcErr:     nil,
+			wantErr:     fmt.Errorf("unable to obtain memory usage for resource pool corrupt-val: strconv.Atoi: parsing \"-\": invalid syntax"),
+			wantMemInfo: nil,
+		},
+		{
+			testName: "pool_info_memory_limit_corrupt",
+			response: `Name: Test-ResourcePool
+					Mem Usage:100
+					Mem Limit:corrupt-val`,
+			govcErr:     nil,
+			wantErr:     fmt.Errorf("unable to obtain memory limit for resource pool corrupt-val: strconv.Atoi: parsing \"-\": invalid syntax"),
+			wantMemInfo: nil,
+		},
+		{
+			testName:    "pool_info_error",
+			response:    "",
+			govcErr:     govcErr,
+			wantErr:     fmt.Errorf("getting resource pool information: %v", govcErr),
+			wantMemInfo: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.testName, func(t *testing.T) {
+			gt := NewWithT(t)
+			responseBytes := bytes.NewBuffer([]byte(tt.response))
+			executable.EXPECT().ExecuteWithEnv(ctx, env, "pool.info", "-dc", datacenter, resourcePool).Return(*responseBytes, tt.govcErr)
+			poolMemInfo, err := g.GetResourcePoolInfo(ctx, datacenter, resourcePool)
+			if tt.wantErr != nil {
+				gt.Expect(err.Error()).To(Equal(tt.wantErr.Error()))
+			}
+			gt.Expect(poolMemInfo).To(Equal(tt.wantMemInfo))
+		})
 	}
 }

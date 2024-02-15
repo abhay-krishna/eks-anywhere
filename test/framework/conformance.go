@@ -7,17 +7,16 @@ import (
 
 	"github.com/aws/eks-anywhere/internal/pkg/conformance"
 	"github.com/aws/eks-anywhere/pkg/api/v1alpha1"
-	"github.com/aws/eks-anywhere/pkg/files"
 	"github.com/aws/eks-anywhere/pkg/manifests"
 	"github.com/aws/eks-anywhere/pkg/manifests/bundles"
 	"github.com/aws/eks-anywhere/pkg/version"
 )
 
-const kubeConformanceImage = "k8s.gcr.io/conformance"
+const kubeConformanceImage = "registry.k8s.io/conformance"
 
 func (e *ClusterE2ETest) RunConformanceTests() {
 	ctx := context.Background()
-	cluster := e.cluster()
+	cluster := e.Cluster()
 	setKubeconfigEnvVar(e.T, e.ClusterName)
 	contextName, err := e.KubectlClient.GetCurrentClusterContext(ctx, cluster)
 	if err != nil {
@@ -62,7 +61,7 @@ func (e *ClusterE2ETest) getEksdReleaseKubeVersion() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("fetching cluster config from file: %v", err)
 	}
-	r := manifests.NewReader(files.NewReader())
+	r := manifests.NewReader(newFileReader())
 	b, err := r.ReadBundlesForVersion(version.Get().GitVersion)
 	if err != nil {
 		return "", fmt.Errorf("getting EKS-D release spec from bundle: %v", err)

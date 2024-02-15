@@ -6,17 +6,27 @@ on:
     branches:
       - main
   pull_request:
+    paths:
+    - '**.go'
+permissions:
+  contents: read
+  pull-requests: read
 jobs:
   golangci:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-go@v2
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          go-version: 1.17.8
-      - uses: actions/checkout@v2
+          go-version: "1.20"
+          check-latest: true
+          cache: true
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v2
+        uses: golangci/golangci-lint-action@v4
         with:
-          version: v1.45.2
-          skip-go-installation: true
+          version: v1.51.2
+          only-new-issues: true
+          # Disable package caching to avoid a double cache with setup-go.
+          skip-pkg-cache: true
+          args: --timeout 10m

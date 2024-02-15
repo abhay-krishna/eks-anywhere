@@ -2,17 +2,18 @@ package v1alpha1
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 
 	"github.com/aws/eks-anywhere/pkg/constants"
 	"github.com/aws/eks-anywhere/pkg/logger"
+	"github.com/aws/eks-anywhere/pkg/utils/ptr"
 )
 
 var clusterDefaults = []func(*Cluster) error{
 	setRegistryMirrorConfigDefaults,
 	setWorkerNodeGroupDefaults,
 	setCNIConfigDefault,
+	setEtcdEncryptionConfigDefaults,
 }
 
 func setClusterDefaults(cluster *Cluster) error {
@@ -34,7 +35,7 @@ func setRegistryMirrorConfigDefaults(clusterConfig *Cluster) error {
 	}
 	if clusterConfig.Spec.RegistryMirrorConfiguration.CACertContent == "" {
 		if caCert, set := os.LookupEnv(RegistryMirrorCAKey); set && len(caCert) > 0 {
-			content, err := ioutil.ReadFile(caCert)
+			content, err := os.ReadFile(caCert)
 			if err != nil {
 				return fmt.Errorf("reading the cert file %s: %v", caCert, err)
 			}
@@ -50,6 +51,16 @@ func setWorkerNodeGroupDefaults(cluster *Cluster) error {
 		logger.V(1).Info("First worker node group name not specified. Defaulting name to md-0.")
 		cluster.Spec.WorkerNodeGroupConfigurations[0].Name = "md-0"
 	}
+
+	for i := range cluster.Spec.WorkerNodeGroupConfigurations {
+		w := &cluster.Spec.WorkerNodeGroupConfigurations[i]
+		if w.Count == nil && w.AutoScalingConfiguration != nil {
+			w.Count = &w.AutoScalingConfiguration.MinCount
+		} else if w.Count == nil {
+			w.Count = ptr.Int(1)
+		}
+	}
+
 	return nil
 }
 

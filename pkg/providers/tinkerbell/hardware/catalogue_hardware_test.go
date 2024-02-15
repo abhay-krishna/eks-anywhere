@@ -6,8 +6,8 @@ import (
 	"github.com/onsi/gomega"
 	"github.com/tinkerbell/tink/pkg/apis/core/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	eksav1alpha1 "github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/providers/tinkerbell/hardware"
 )
 
@@ -19,6 +19,162 @@ func TestCatalogue_Hardware_Insert(t *testing.T) {
 	err := catalogue.InsertHardware(&v1alpha1.Hardware{})
 	g.Expect(err).ToNot(gomega.HaveOccurred())
 	g.Expect(catalogue.TotalHardware()).To(gomega.Equal(1))
+}
+
+func TestCatalogue_Hardwares_Remove(t *testing.T) {
+	g := gomega.NewWithT(t)
+
+	catalogue := hardware.NewCatalogue()
+
+	err := catalogue.InsertHardware(&v1alpha1.Hardware{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "hw1",
+			Namespace: "namespace",
+		},
+	})
+	g.Expect(err).ToNot(gomega.HaveOccurred())
+	err = catalogue.InsertHardware(&v1alpha1.Hardware{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "hw2",
+			Namespace: "namespace",
+		},
+	})
+	g.Expect(err).ToNot(gomega.HaveOccurred())
+	g.Expect(catalogue.RemoveHardwares([]v1alpha1.Hardware{
+		{
+			ObjectMeta: v1.ObjectMeta{
+				Name:      "hw2",
+				Namespace: "namespace",
+			},
+		},
+	})).ToNot(gomega.HaveOccurred())
+	g.Expect(catalogue.TotalHardware()).To(gomega.Equal(1))
+}
+
+func TestCatalogue_Hardwares_RemoveDuplicates(t *testing.T) {
+	g := gomega.NewWithT(t)
+
+	catalogue := hardware.NewCatalogue()
+
+	err := catalogue.InsertHardware(&v1alpha1.Hardware{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "hw1",
+			Namespace: "namespace",
+		},
+	})
+	g.Expect(err).ToNot(gomega.HaveOccurred())
+	err = catalogue.InsertHardware(&v1alpha1.Hardware{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "hw2",
+			Namespace: "namespace",
+		},
+	})
+	g.Expect(err).ToNot(gomega.HaveOccurred())
+	err = catalogue.InsertHardware(&v1alpha1.Hardware{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "hw2",
+			Namespace: "namespace",
+		},
+	})
+	g.Expect(err).ToNot(gomega.HaveOccurred())
+	g.Expect(catalogue.RemoveHardwares([]v1alpha1.Hardware{
+		{
+			ObjectMeta: v1.ObjectMeta{
+				Name:      "hw2",
+				Namespace: "namespace",
+			},
+		},
+	})).ToNot(gomega.HaveOccurred())
+	g.Expect(catalogue.TotalHardware()).To(gomega.Equal(1))
+}
+
+func TestCatalogue_Hardwares_RemoveExtraHw(t *testing.T) {
+	g := gomega.NewWithT(t)
+
+	catalogue := hardware.NewCatalogue()
+
+	err := catalogue.InsertHardware(&v1alpha1.Hardware{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "hw1",
+			Namespace: "namespace",
+		},
+	})
+	g.Expect(err).ToNot(gomega.HaveOccurred())
+	err = catalogue.InsertHardware(&v1alpha1.Hardware{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "hw2",
+			Namespace: "namespace",
+		},
+	})
+	g.Expect(err).ToNot(gomega.HaveOccurred())
+	err = catalogue.InsertHardware(&v1alpha1.Hardware{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "hw3",
+			Namespace: "namespace",
+		},
+	})
+	g.Expect(err).ToNot(gomega.HaveOccurred())
+	g.Expect(catalogue.RemoveHardwares([]v1alpha1.Hardware{
+		{
+			ObjectMeta: v1.ObjectMeta{
+				Name:      "hw2",
+				Namespace: "namespace",
+			},
+		},
+		{
+			ObjectMeta: v1.ObjectMeta{
+				Name:      "hw3",
+				Namespace: "namespace",
+			},
+		},
+	})).ToNot(gomega.HaveOccurred())
+	g.Expect(catalogue.TotalHardware()).To(gomega.Equal(1))
+}
+
+func TestCatalogue_Hardwares_RemoveNothing(t *testing.T) {
+	g := gomega.NewWithT(t)
+
+	catalogue := hardware.NewCatalogue()
+
+	err := catalogue.InsertHardware(&v1alpha1.Hardware{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "hw1",
+			Namespace: "namespace",
+		},
+	})
+	g.Expect(err).ToNot(gomega.HaveOccurred())
+	g.Expect(catalogue.RemoveHardwares([]v1alpha1.Hardware{
+		{
+			ObjectMeta: v1.ObjectMeta{
+				Name:      "hw2",
+				Namespace: "namespace",
+			},
+		},
+	})).ToNot(gomega.HaveOccurred())
+	g.Expect(catalogue.TotalHardware()).To(gomega.Equal(1))
+}
+
+func TestCatalogue_Hardwares_RemoveEverything(t *testing.T) {
+	g := gomega.NewWithT(t)
+
+	catalogue := hardware.NewCatalogue()
+
+	err := catalogue.InsertHardware(&v1alpha1.Hardware{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "hw1",
+			Namespace: "namespace",
+		},
+	})
+	g.Expect(err).ToNot(gomega.HaveOccurred())
+	g.Expect(catalogue.RemoveHardwares([]v1alpha1.Hardware{
+		{
+			ObjectMeta: v1.ObjectMeta{
+				Name:      "hw1",
+				Namespace: "namespace",
+			},
+		},
+	})).ToNot(gomega.HaveOccurred())
+	g.Expect(catalogue.TotalHardware()).To(gomega.Equal(0))
 }
 
 func TestCatalogue_Hardware_UnknownIndexErrors(t *testing.T) {
@@ -123,91 +279,4 @@ func TestHardwareCatalogueWriter_Write(t *testing.T) {
 	hardware := catalogue.AllHardware()
 	g.Expect(hardware).To(gomega.HaveLen(1))
 	g.Expect(hardware[0].Name).To(gomega.Equal(machine.Hostname))
-}
-
-func TestDiskExtractorWithValidHardwareSelectors(t *testing.T) {
-	g := gomega.NewWithT(t)
-
-	diskExtractor := hardware.NewDiskExtractor()
-	machine := NewValidMachine()
-
-	hardwareSelector := eksav1alpha1.HardwareSelector{"type": "cp"}
-	g.Expect(diskExtractor.Register(hardwareSelector)).To(gomega.Succeed())
-
-	err := diskExtractor.Write(machine)
-	g.Expect(err).To(gomega.Succeed())
-
-	disk, err := diskExtractor.GetDisk(hardwareSelector)
-	g.Expect(err).To(gomega.Succeed())
-	g.Expect(disk).To(gomega.Equal(machine.Disk))
-}
-
-func TestDiskExtractor_MachineHasMultipleLabels(t *testing.T) {
-	g := gomega.NewWithT(t)
-
-	diskExtractor := hardware.NewDiskExtractor()
-	machine := NewValidMachine()
-	machine.Labels = map[string]string{
-		"type": "cp",
-		"foo":  "foo",
-		"bar":  "bar",
-	}
-
-	hardwareSelector := eksav1alpha1.HardwareSelector{"type": "cp"}
-	g.Expect(diskExtractor.Register(hardwareSelector)).To(gomega.Succeed())
-
-	err := diskExtractor.Write(machine)
-	g.Expect(err).To(gomega.Succeed())
-
-	disk, err := diskExtractor.GetDisk(hardwareSelector)
-	g.Expect(err).To(gomega.Succeed())
-	g.Expect(disk).To(gomega.Equal(machine.Disk))
-}
-
-func TestDiskExtractor_MultipleSelectors(t *testing.T) {
-	g := gomega.NewWithT(t)
-
-	extractor := hardware.NewDiskExtractor()
-
-	machine1 := NewValidMachine()
-	machine1.Disk = "/dev/foo"
-	machine1.Labels = map[string]string{"foo": "foo"}
-	selector1 := eksav1alpha1.HardwareSelector{"foo": "foo"}
-	g.Expect(extractor.Register(selector1)).To(gomega.Succeed())
-
-	machine2 := NewValidMachine()
-	machine2.Disk = "/dev/bar"
-	machine2.Labels = map[string]string{"bar": "bar"}
-	selector2 := eksav1alpha1.HardwareSelector{"bar": "bar"}
-	g.Expect(extractor.Register(selector2)).To(gomega.Succeed())
-
-	err := extractor.Write(machine1)
-	g.Expect(err).To(gomega.Succeed())
-
-	err = extractor.Write(machine2)
-	g.Expect(err).To(gomega.Succeed())
-
-	disk, err := extractor.GetDisk(selector1)
-	g.Expect(err).To(gomega.Succeed())
-	g.Expect(disk).To(gomega.Equal(machine1.Disk))
-
-	disk, err = extractor.GetDisk(selector2)
-	g.Expect(err).To(gomega.Succeed())
-	g.Expect(disk).To(gomega.Equal(machine2.Disk))
-}
-
-func TestDiskExtractorNoDiskFound(t *testing.T) {
-	g := gomega.NewWithT(t)
-
-	diskExtractor := hardware.NewDiskExtractor()
-	machine := NewValidMachine()
-
-	hardwareSelector := eksav1alpha1.HardwareSelector{"type": "cp1"}
-	g.Expect(diskExtractor.Register(hardwareSelector)).To(gomega.Succeed())
-
-	err := diskExtractor.Write(machine)
-	g.Expect(err).To(gomega.Succeed())
-
-	_, err = diskExtractor.GetDisk(hardwareSelector)
-	g.Expect(err).To(gomega.MatchError(hardware.ErrDiskNotFound{}))
 }

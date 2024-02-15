@@ -3,24 +3,29 @@ package executables_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	. "github.com/onsi/gomega"
 
+	"github.com/aws/eks-anywhere/pkg/constants"
 	"github.com/aws/eks-anywhere/pkg/executables"
 	"github.com/aws/eks-anywhere/pkg/executables/mocks"
+	"github.com/aws/eks-anywhere/pkg/helm"
+	"github.com/aws/eks-anywhere/pkg/registrymirror"
 )
 
 type helmTest struct {
 	*WithT
 	ctx     context.Context
-	h       *executables.Helm
+	h       helm.Client
 	e       *mocks.MockExecutable
 	envVars map[string]string
 }
 
-func newHelmTest(t *testing.T, opts ...executables.HelmOpt) *helmTest {
+func newHelmTest(t *testing.T, opts ...helm.Opt) *helmTest {
 	ctrl := gomock.NewController(t)
 	e := mocks.NewMockExecutable(ctrl)
 	return &helmTest{
@@ -42,7 +47,7 @@ type helmTemplateTest struct {
 	wantTemplateContent        []byte
 }
 
-func newHelmTemplateTest(t *testing.T, opts ...executables.HelmOpt) *helmTemplateTest {
+func newHelmTemplateTest(t *testing.T, opts ...helm.Opt) *helmTemplateTest {
 	return &helmTemplateTest{
 		helmTest: newHelmTest(t, opts...),
 		values: map[string]string{
@@ -70,7 +75,7 @@ func TestHelmTemplateSuccess(t *testing.T) {
 }
 
 func TestHelmTemplateSuccessWithInsecure(t *testing.T) {
-	tt := newHelmTemplateTest(t, executables.WithInsecure())
+	tt := newHelmTemplateTest(t, helm.WithInsecure())
 	expectCommand(
 		tt.e, tt.ctx, "template", tt.ociURI, "--version", tt.version, "--namespace", tt.namespace, "--kube-version", "1.22", "--insecure-skip-tls-verify", "-f", "-",
 	).withStdIn(tt.valuesYaml).withEnvVars(tt.envVars).to().Return(*bytes.NewBuffer(tt.wantTemplateContent), nil)
@@ -79,7 +84,9 @@ func TestHelmTemplateSuccessWithInsecure(t *testing.T) {
 }
 
 func TestHelmTemplateSuccessWithRegistryMirror(t *testing.T) {
-	tt := newHelmTemplateTest(t, executables.WithRegistryMirror("1.2.3.4:443"))
+	tt := newHelmTemplateTest(t, helm.WithRegistryMirror(&registrymirror.RegistryMirror{
+		BaseRegistry: "1.2.3.4:443",
+	}))
 	ociRegistryMirror := "oci://1.2.3.4:443/account/charts"
 	expectCommand(
 		tt.e, tt.ctx, "template", ociRegistryMirror, "--version", tt.version, "--namespace", tt.namespace, "--kube-version", "1.22", "-f", "-",
@@ -89,7 +96,7 @@ func TestHelmTemplateSuccessWithRegistryMirror(t *testing.T) {
 }
 
 func TestHelmTemplateSuccessWithEnv(t *testing.T) {
-	tt := newHelmTemplateTest(t, executables.WithEnv(map[string]string{
+	tt := newHelmTemplateTest(t, helm.WithProxyConfig(map[string]string{
 		"HTTPS_PROXY": "test1",
 	}))
 	expectedEnv := map[string]string{
@@ -125,7 +132,7 @@ func TestHelmSaveChartSuccess(t *testing.T) {
 }
 
 func TestHelmSaveChartSuccessWithInsecure(t *testing.T) {
-	tt := newHelmTest(t, executables.WithInsecure())
+	tt := newHelmTest(t, helm.WithInsecure())
 	url := "url"
 	version := "1.1"
 	destinationFolder := "folder"
@@ -136,6 +143,19 @@ func TestHelmSaveChartSuccessWithInsecure(t *testing.T) {
 	tt.Expect(tt.h.SaveChart(tt.ctx, url, version, destinationFolder)).To(Succeed())
 }
 
+func TestHelmSkipCRDs(t *testing.T) {
+	tt := newHelmTest(t)
+	url := "url"
+	version := "1.1"
+	kubeconfig := "kubeconfig"
+	chart := "chart"
+	expectCommand(
+		tt.e, tt.ctx, "upgrade", "--install", chart, url, "--version", version, "--skip-crds", "--kubeconfig", kubeconfig, "--create-namespace", "--namespace", constants.EksaPackagesName,
+	).withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, nil)
+
+	tt.Expect(tt.h.InstallChart(tt.ctx, chart, url, version, kubeconfig, constants.EksaPackagesName, "", true, nil)).To(Succeed())
+}
+
 func TestHelmInstallChartSuccess(t *testing.T) {
 	tt := newHelmTest(t)
 	chart := "chart"
@@ -144,24 +164,54 @@ func TestHelmInstallChartSuccess(t *testing.T) {
 	kubeconfig := "/root/.kube/config"
 	values := []string{"key1=value1"}
 	expectCommand(
-		tt.e, tt.ctx, "install", chart, url, "--version", version, "--set", "key1=value1", "--kubeconfig", kubeconfig,
+		tt.e, tt.ctx, "upgrade", "--install", chart, url, "--version", version, "--set", "key1=value1", "--kubeconfig", kubeconfig, "--create-namespace", "--namespace", "eksa-packages",
 	).withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, nil)
 
-	tt.Expect(tt.h.InstallChart(tt.ctx, chart, url, version, kubeconfig, values)).To(Succeed())
+	tt.Expect(tt.h.InstallChart(tt.ctx, chart, url, version, kubeconfig, "eksa-packages", "", false, values)).To(Succeed())
+}
+
+func TestHelmInstallChartSuccessWithValuesFile(t *testing.T) {
+	tt := newHelmTest(t)
+	chart := "chart"
+	url := "url"
+	version := "1.1"
+	kubeconfig := "/root/.kube/config"
+	values := []string{"key1=value1"}
+	valuesFileName := "values.yaml"
+	expectCommand(
+		tt.e, tt.ctx, "upgrade", "--install", chart, url, "--version", version, "--set", "key1=value1", "--kubeconfig", kubeconfig, "--create-namespace", "--namespace", "eksa-packages", "-f", valuesFileName,
+	).withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, nil)
+
+	tt.Expect(tt.h.InstallChart(tt.ctx, chart, url, version, kubeconfig, "eksa-packages", valuesFileName, false, values)).To(Succeed())
 }
 
 func TestHelmInstallChartSuccessWithInsecure(t *testing.T) {
-	tt := newHelmTest(t, executables.WithInsecure())
+	tt := newHelmTest(t, helm.WithInsecure())
 	chart := "chart"
 	url := "url"
 	version := "1.1"
 	kubeconfig := "/root/.kube/config"
 	values := []string{"key1=value1"}
 	expectCommand(
-		tt.e, tt.ctx, "install", chart, url, "--version", version, "--set", "key1=value1", "--kubeconfig", kubeconfig, "--insecure-skip-tls-verify",
+		tt.e, tt.ctx, "upgrade", "--install", chart, url, "--version", version, "--set", "key1=value1", "--kubeconfig", kubeconfig, "--create-namespace", "--namespace", "eksa-packages", "--insecure-skip-tls-verify",
 	).withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, nil)
 
-	tt.Expect(tt.h.InstallChart(tt.ctx, chart, url, version, kubeconfig, values)).To(Succeed())
+	tt.Expect(tt.h.InstallChart(tt.ctx, chart, url, version, kubeconfig, "eksa-packages", "", false, values)).To(Succeed())
+}
+
+func TestHelmInstallChartSuccessWithInsecureAndValuesFile(t *testing.T) {
+	tt := newHelmTest(t, helm.WithInsecure())
+	chart := "chart"
+	url := "url"
+	version := "1.1"
+	kubeconfig := "/root/.kube/config"
+	values := []string{"key1=value1"}
+	valuesFileName := "values.yaml"
+	expectCommand(
+		tt.e, tt.ctx, "upgrade", "--install", chart, url, "--version", version, "--set", "key1=value1", "--kubeconfig", kubeconfig, "--create-namespace", "--namespace", "eksa-packages", "-f", valuesFileName, "--insecure-skip-tls-verify",
+	).withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, nil)
+
+	tt.Expect(tt.h.InstallChart(tt.ctx, chart, url, version, kubeconfig, "eksa-packages", valuesFileName, false, values)).To(Succeed())
 }
 
 func TestHelmGetValueArgs(t *testing.T) {
@@ -198,22 +248,105 @@ func TestHelmInstallChartWithValuesFileSuccess(t *testing.T) {
 	kubeconfig := "/root/.kube/config"
 	valuesFileName := "values.yaml"
 	expectCommand(
-		tt.e, tt.ctx, "install", chart, url, "--version", version, "--values", valuesFileName, "--kubeconfig", kubeconfig,
+		tt.e, tt.ctx, "upgrade", "--install", chart, url, "--version", version, "--values", valuesFileName, "--kubeconfig", kubeconfig, "--wait",
 	).withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, nil)
 
 	tt.Expect(tt.h.InstallChartWithValuesFile(tt.ctx, chart, url, version, kubeconfig, valuesFileName)).To(Succeed())
 }
 
 func TestHelmInstallChartWithValuesFileSuccessWithInsecure(t *testing.T) {
-	tt := newHelmTest(t, executables.WithInsecure())
+	tt := newHelmTest(t, helm.WithInsecure())
 	chart := "chart"
 	url := "url"
 	version := "1.1"
 	kubeconfig := "/root/.kube/config"
 	valuesFileName := "values.yaml"
 	expectCommand(
-		tt.e, tt.ctx, "install", chart, url, "--version", version, "--values", valuesFileName, "--kubeconfig", kubeconfig, "--insecure-skip-tls-verify",
+		tt.e, tt.ctx, "upgrade", "--install", chart, url, "--version", version, "--values", valuesFileName, "--kubeconfig", kubeconfig, "--wait", "--insecure-skip-tls-verify",
 	).withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, nil)
 
 	tt.Expect(tt.h.InstallChartWithValuesFile(tt.ctx, chart, url, version, kubeconfig, valuesFileName)).To(Succeed())
+}
+
+func TestHelmListCharts(t *testing.T) {
+	tt := newHelmTest(t, helm.WithInsecure())
+	kubeconfig := "/root/.kube/config"
+	t.Run("Normal functionality", func(t *testing.T) {
+		output := []byte("eks-anywhere-packages\n")
+		expected := []string{"eks-anywhere-packages"}
+		expectCommand(tt.e, tt.ctx, "list", "-q", "--kubeconfig", kubeconfig).withEnvVars(tt.envVars).to().Return(*bytes.NewBuffer(output), nil)
+		tt.Expect(tt.h.ListCharts(tt.ctx, kubeconfig)).To(Equal(expected))
+	})
+
+	t.Run("Empty output", func(t *testing.T) {
+		expected := []string{}
+		expectCommand(tt.e, tt.ctx, "list", "-q", "--kubeconfig", kubeconfig).withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, nil)
+		tt.Expect(tt.h.ListCharts(tt.ctx, kubeconfig)).To(Equal(expected))
+	})
+
+	t.Run("Errored out", func(t *testing.T) {
+		output := errors.New("Error")
+		var expected []string
+		expectCommand(tt.e, tt.ctx, "list", "-q", "--kubeconfig", kubeconfig).withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, output)
+		result, err := tt.h.ListCharts(tt.ctx, kubeconfig)
+		tt.Expect(err).To(HaveOccurred())
+		tt.Expect(result).To(Equal(expected))
+	})
+}
+
+func TestHelmDelete(s *testing.T) {
+	kubeconfig := "/root/.kube/config"
+
+	s.Run("Success", func(t *testing.T) {
+		tt := newHelmTest(s)
+		installName := "test-install"
+		expectCommand(tt.e, tt.ctx, "delete", installName, "--kubeconfig", kubeconfig).withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, nil)
+		err := tt.h.Delete(tt.ctx, kubeconfig, installName, "")
+		tt.Expect(err).NotTo(HaveOccurred())
+	})
+
+	s.Run("passes the namespace, if present", func(t *testing.T) {
+		tt := newHelmTest(s)
+		testNamespace := "testing"
+		installName := "test-install"
+		expectCommand(tt.e, tt.ctx, "delete", installName, "--kubeconfig", kubeconfig, "--namespace", testNamespace).withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, nil)
+		err := tt.h.Delete(tt.ctx, kubeconfig, installName, testNamespace)
+		tt.Expect(err).NotTo(HaveOccurred())
+	})
+
+	s.Run("passes the insecure skip flag", func(t *testing.T) {
+		tt := newHelmTest(t, helm.WithInsecure())
+		installName := "test-install"
+		expectCommand(tt.e, tt.ctx, "delete", installName, "--kubeconfig", kubeconfig, "--insecure-skip-tls-verify").withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, nil)
+		err := tt.h.Delete(tt.ctx, kubeconfig, installName, "")
+		tt.Expect(err).NotTo(HaveOccurred())
+	})
+
+	s.Run("returns errors from the helm executable", func(t *testing.T) {
+		tt := newHelmTest(s)
+		installName := "test-install"
+		expectCommand(tt.e, tt.ctx, "delete", installName, "--kubeconfig", kubeconfig).withEnvVars(tt.envVars).to().Return(bytes.Buffer{}, fmt.Errorf("test error"))
+		err := tt.h.Delete(tt.ctx, kubeconfig, installName, "")
+		tt.Expect(err).To(HaveOccurred())
+	})
+}
+
+func TestHelmRegistryLoginSuccess(t *testing.T) {
+	tt := newHelmTest(t)
+	registry := "1.2.3.4:5050"
+	username := "username"
+	password := "password"
+
+	expectCommand(tt.e, tt.ctx, "registry", "login", registry, "--username", username, "--password-stdin").withEnvVars(tt.envVars).withStdIn([]byte(password)).to().Return(bytes.Buffer{}, nil)
+	tt.Expect(tt.h.RegistryLogin(tt.ctx, registry, username, password)).To(Succeed())
+}
+
+func TestHelmRegistryLoginSuccessWithInsecure(t *testing.T) {
+	tt := newHelmTest(t, helm.WithInsecure())
+	registry := "1.2.3.4:5050"
+	username := "username"
+	password := "password"
+
+	expectCommand(tt.e, tt.ctx, "registry", "login", registry, "--username", username, "--password-stdin", "--insecure").withEnvVars(tt.envVars).withStdIn([]byte(password)).to().Return(bytes.Buffer{}, nil)
+	tt.Expect(tt.h.RegistryLogin(tt.ctx, registry, username, password)).To(Succeed())
 }

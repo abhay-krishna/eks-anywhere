@@ -22,6 +22,8 @@ export LANG=C.UTF-8
 
 BASE_DIRECTORY=$(git rev-parse --show-toplevel)
 
+source "$BASE_DIRECTORY"/scripts/eksa_version.sh
+
 ARTIFACTS_DIR="${1?Specify first argument - artifacts path}"
 SOURCE_BUCKET="${2?Specify second argument - source bucket}"
 RELEASE_BUCKET="${3?Specify third argument - release bucket}"
@@ -33,10 +35,14 @@ CLI_REPO_URL="${8?Specify eighth argument - CLI repo URL}"
 BUILD_REPO_BRANCH_NAME="${9?Specify ninth argument - Build repo branch name}"
 CLI_REPO_BRANCH_NAME="${10?Specify tenth argument - CLI repo branch name}"
 DRY_RUN="${11?Specify eleventh argument - Dry run}"
+WEEKLY="${12?Specify twelfth argument - Weekly release}"
 
 mkdir -p "${ARTIFACTS_DIR}"
 
+release_version=$(eksa-version::get_next_eksa_version_for_ancestor "$CLI_REPO_BRANCH_NAME")
+
 ${BASE_DIRECTORY}/release/bin/eks-anywhere-release release \
+    --release-version "${release_version}" \
     --artifact-dir "${ARTIFACTS_DIR}" \
     --build-repo-url "${BUILD_REPO_URL}" \
     --cli-repo-url "${CLI_REPO_URL}" \
@@ -48,4 +54,6 @@ ${BASE_DIRECTORY}/release/bin/eks-anywhere-release release \
     --release-bucket "${RELEASE_BUCKET}" \
     --release-container-registry "${RELEASE_CONTAINER_REGISTRY}" \
     --dev-release=true \
-    --dry-run=${DRY_RUN}
+    --dry-run=${DRY_RUN} \
+    --weekly=${WEEKLY} \
+    --aws-signer-profile-arn "${AWS_SIGNER_PROFILE_ARN}"

@@ -1,13 +1,13 @@
 package features
 
+// These are environment variables used as flags to enable/disable features.
 const (
-	CloudStackProviderEnvVar        = "CLOUDSTACK_PROVIDER"
 	CloudStackKubeVipDisabledEnvVar = "CLOUDSTACK_KUBE_VIP_DISABLED"
-	SnowProviderEnvVar              = "SNOW_PROVIDER"
-	FullLifecycleAPIEnvVar          = "FULL_LIFECYCLE_API"
-	FullLifecycleGate               = "FullLifecycleAPI"
-	CuratedPackagesEnvVar           = "CURATED_PACKAGES_SUPPORT"
-	K8s123SupportEnvVar             = "K8S_1_23_SUPPORT"
+	CheckpointEnabledEnvVar         = "CHECKPOINT_ENABLED"
+	UseNewWorkflowsEnvVar           = "USE_NEW_WORKFLOWS"
+	UseControllerForCli             = "USE_CONTROLLER_FOR_CLI"
+	K8s129SupportEnvVar             = "K8S_1_29_SUPPORT"
+	VSphereInPlaceEnvVar            = "VSPHERE_IN_PLACE_UPGRADE"
 )
 
 func FeedGates(featureGates []string) {
@@ -23,23 +23,9 @@ func IsActive(feature Feature) bool {
 	return feature.IsActive()
 }
 
-// ClearCache is mainly used for unit tests as of now
+// ClearCache is mainly used for unit tests as of now.
 func ClearCache() {
 	globalFeatures.clearCache()
-}
-
-func FullLifecycleAPI() Feature {
-	return Feature{
-		Name:     "Full lifecycle API support through the EKS-A controller",
-		IsActive: globalFeatures.isActiveForEnvVarOrGate(FullLifecycleAPIEnvVar, FullLifecycleGate),
-	}
-}
-
-func CloudStackProvider() Feature {
-	return Feature{
-		Name:     "CloudStack provider support",
-		IsActive: globalFeatures.isActiveForEnvVar(CloudStackProviderEnvVar),
-	}
 }
 
 func CloudStackKubeVipDisabled() Feature {
@@ -49,23 +35,40 @@ func CloudStackKubeVipDisabled() Feature {
 	}
 }
 
-func SnowProvider() Feature {
+func CheckpointEnabled() Feature {
 	return Feature{
-		Name:     "Snow provider support",
-		IsActive: globalFeatures.isActiveForEnvVar(SnowProviderEnvVar),
+		Name:     "Checkpoint to rerun commands enabled",
+		IsActive: globalFeatures.isActiveForEnvVar(CheckpointEnabledEnvVar),
 	}
 }
 
-func CuratedPackagesSupport() Feature {
+func UseNewWorkflows() Feature {
 	return Feature{
-		Name:     "Curated Packages Support",
-		IsActive: globalFeatures.isActiveForEnvVar(CuratedPackagesEnvVar),
+		Name:     "Use new workflow logic for cluster management operations",
+		IsActive: globalFeatures.isActiveForEnvVar(UseNewWorkflowsEnvVar),
 	}
 }
 
-func K8s123Support() Feature {
+// UseControllerViaCLIWorkflow is used for the controller behind the CLI workflow.
+func UseControllerViaCLIWorkflow() Feature {
 	return Feature{
-		Name:     "Kubernetes version 1.23 support",
-		IsActive: globalFeatures.isActiveForEnvVar(K8s123SupportEnvVar),
+		Name:     "Use new workflow logic for cluster operations leveraging controller via CLI",
+		IsActive: globalFeatures.isActiveForEnvVar(UseControllerForCli),
+	}
+}
+
+// K8s129Support is the feature flag for Kubernetes 1.29 support.
+func K8s129Support() Feature {
+	return Feature{
+		Name:     "Kubernetes version 1.29 support",
+		IsActive: globalFeatures.isActiveForEnvVar(K8s129SupportEnvVar),
+	}
+}
+
+// VSphereInPlaceUpgradeEnabled is the feature flag for performing in-place upgrades with the vSphere provider.
+func VSphereInPlaceUpgradeEnabled() Feature {
+	return Feature{
+		Name:     "Perform in-place upgrades with the vSphere provider",
+		IsActive: globalFeatures.isActiveForEnvVar(VSphereInPlaceEnvVar),
 	}
 }

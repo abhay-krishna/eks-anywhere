@@ -11,12 +11,15 @@ spec:
       cidrBlocks: [192.168.0.0/16]
     services:
       cidrBlocks: [10.96.0.0/12]
+  controlPlaneEndpoint:
+    host: 1.2.3.4
+    port: 6443
   controlPlaneRef:
     apiVersion: controlplane.cluster.x-k8s.io/v1beta1
     kind: KubeadmControlPlane
     name: test
   infrastructureRef:
-    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta3
     kind: CloudStackCluster
     name: test
   managedExternalEtcdRef:
@@ -24,7 +27,7 @@ spec:
     kind: EtcdadmCluster
     name: test-etcd
 ---
-apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta3
 kind: CloudStackCluster
 metadata:
   name: test
@@ -33,38 +36,19 @@ spec:
   controlPlaneEndpoint:
     host: 1.2.3.4
     port: 6443
-  zones:
-    - network:
-        name: net1
+  failureDomains:
+  - name: default-az-0
+    zone:
+      id: 
       name: zone1
-  domain: domain1
-  account: admin
----
-apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-kind: CloudStackMachineTemplate
-metadata:
-  name: test-control-plane-template-1234567890000
-  namespace: eksa-system
-  annotations:
-    mountpath.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: /data-small
-    device.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: /dev/vdb
-    filesystem.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: ext4
-    label.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: data_disk
-spec:
-  template:
-    spec:
-      offering:
-        name: m4-large
-      template:
-        name: centos7-k8s-118
-      diskOffering:
-        name: Small
-        mountPath: /data-small
-        device: /dev/vdb
-        filesystem: ext4
-        label: data_disk
-      affinitygroupids:
-      - control-plane-anti-affinity
+      network:
+        id: 
+        name: net1
+    domain: domain1
+    account: admin
+    acsEndpoint:
+      name: global
+      namespace: eksa-system
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1beta1
 kind: KubeadmControlPlane
@@ -74,7 +58,7 @@ metadata:
 spec:
   machineTemplate:
     infrastructureRef:
-      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta3
       kind: CloudStackMachineTemplate
       name: test-control-plane-template-1234567890000
   kubeadmConfigSpec:
@@ -341,8 +325,7 @@ spec:
           anonymous-auth: "false"
           node-labels: label1=foo,label2=bar
           tls-cipher-suites: TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
-        name: '{{ ds.meta_data.local_hostname }}'
-        taints: []
+        name: "{{ ds.meta_data.hostname }}"
     joinConfiguration:
       nodeRegistration:
         criSocket: /var/run/containerd/containerd.sock
@@ -352,15 +335,14 @@ spec:
           anonymous-auth: "false"
           node-labels: label1=foo,label2=bar
           tls-cipher-suites: TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
-        name: '{{ ds.meta_data.local_hostname }}'
-        taints: []
+        name: "{{ ds.meta_data.hostname }}"
     preKubeadmCommands:
     - swapoff -a
-    - hostname "{{ ds.meta_data.local_hostname }}"
+    - hostname "{{ ds.meta_data.hostname }}"
     - echo "::1         ipv6-localhost ipv6-loopback" >/etc/hosts
     - echo "127.0.0.1   localhost" >>/etc/hosts
-    - echo "127.0.0.1   {{ ds.meta_data.local_hostname }}" >>/etc/hosts
-    - echo "{{ ds.meta_data.local_hostname }}" >/etc/hostname
+    - echo "127.0.0.1   {{ ds.meta_data.hostname }}" >>/etc/hosts
+    - echo "{{ ds.meta_data.hostname }}" >/etc/hostname
     diskSetup:
       filesystems:
         - device: /dev/vdb1
@@ -401,6 +383,7 @@ spec:
     cloudInitConfig:
       version: 3.4.16
       installDir: "/usr/bin"
+      etcdReleaseURL: https://distro.eks.amazonaws.com/kubernetes-1-21/releases/4/artifacts/etcd/v3.4.16/etcd-linux-amd64-v3.4.16.tar.gz
     etcdadmInstallCommands:
       - echo this line exists so that etcdadmInstallCommands is not empty
       - echo etcdadmInstallCommands can be removed once etcdadm bootstrap and controller fix the bug
@@ -408,11 +391,11 @@ spec:
       - echo https://github.com/mrajashree/etcdadm-bootstrap-provider/issues/13
     preEtcdadmCommands:
     - swapoff -a
-    - hostname "{{ ds.meta_data.local_hostname }}"
+    - hostname "{{ ds.meta_data.hostname }}"
     - echo "::1         ipv6-localhost ipv6-loopback" >/etc/hosts
     - echo "127.0.0.1   localhost" >>/etc/hosts
-    - echo "127.0.0.1   {{ ds.meta_data.local_hostname }}" >>/etc/hosts
-    - echo "{{ ds.meta_data.local_hostname }}" >/etc/hostname
+    - echo "127.0.0.1   {{ ds.meta_data.hostname }}" >>/etc/hosts
+    - echo "{{ ds.meta_data.hostname }}" >/etc/hostname
     - >-
       echo "type=83" | sfdisk /dev/vdb &&
       mkfs -t ext4 /dev/vdb1 &&
@@ -426,32 +409,67 @@ spec:
       - 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC1BK73XhIzjX+meUr7pIYh6RHbvI3tmHeQIXY5lv7aztN1UoX+bhPo3dwo2sfSQn5kuxgQdnxIZ/CTzy0p0GkEYVv3gwspCeurjmu0XmrdmaSGcGxCEWT/65NtvYrQtUE5ELxJ+N/aeZNlK2B7IWANnw/82913asXH4VksV1NYNduP0o1/G4XcwLLSyVFB078q/oEnmvdNIoS61j4/o36HVtENJgYr0idcBvwJdvcGxGnPaqOhx477t+kfJAa5n5dSA5wilIaoXH5i1Tf/HsTCM52L+iNCARvQzJYZhzbWI1MDQwzILtIBEQCJsl2XSqIupleY8CxqQ6jCXt2mhae+wPc3YmbO5rFvr2/EvC57kh3yDs1Nsuj8KOvD78KeeujbR8n8pScm3WDp62HFQ8lEKNdeRNj6kB8WnuaJvPnyZfvzOhwG65/9w13IBl7B1sWxbFnq2rMpm5uHVK7mAmjL0Tt8zoDhcE1YJEnp9xte3/pvmKPkST5Q/9ZtR9P5sI+02jY0fvPkPyC03j2gsPixG7rpOCwpOdbny4dcj0TDeeXJX8er+oVfJuLYz0pNWJcT2raDdFfcqvYA0B0IyNYlj5nWX4RuEcyT3qocLReWPnZojetvAG/H8XwOh7fEVGqHAKOVSnPXCSQJPl6s0H12jPJBDJMTydtYPEszl4/CeQ=='
       sudo: ALL=(ALL) NOPASSWD:ALL
   infrastructureTemplate:
-    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta3
     kind: CloudStackMachineTemplate
     name: test-etcd-template-1234567890000
 ---
-apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta3
 kind: CloudStackMachineTemplate
 metadata:
-  name: test-etcd-template-1234567890000
-  namespace: 'eksa-system'
   annotations:
-    mountpath.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: /data-small
     device.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: /dev/vdb
     filesystem.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: ext4
     label.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: data_disk
+    mountpath.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: /data-small
+  creationTimestamp: null
+  name: test-control-plane-template-1234567890000
+  namespace: eksa-system
 spec:
   template:
     spec:
-      offering:
-        name: m4-large
-      template:
-        name: centos7-k8s-118
+      affinityGroupIDs:
+      - control-plane-anti-affinity
       diskOffering:
-        name: Small
-        mountPath: /data-small
+        customSizeInGB: 0
         device: /dev/vdb
         filesystem: ext4
         label: data_disk
-      affinitygroupids:
+        mountPath: /data-small
+        name: Small
+      offering:
+        name: m4-large
+      sshKey: ""
+      template:
+        name: kubernetes_1_21
+
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta3
+kind: CloudStackMachineTemplate
+metadata:
+  annotations:
+    device.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: /dev/vdb
+    filesystem.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: ext4
+    label.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: data_disk
+    mountpath.diskoffering.cloudstack.anywhere.eks.amazonaws.com/v1alpha1: /data-small
+  creationTimestamp: null
+  name: test-etcd-template-1234567890000
+  namespace: eksa-system
+spec:
+  template:
+    spec:
+      affinityGroupIDs:
       - etcd-affinity
+      diskOffering:
+        customSizeInGB: 0
+        device: /dev/vdb
+        filesystem: ext4
+        label: data_disk
+        mountPath: /data-small
+        name: Small
+      offering:
+        name: m4-large
+      sshKey: ""
+      template:
+        name: kubernetes_1_21
+
+---

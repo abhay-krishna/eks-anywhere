@@ -222,7 +222,7 @@ func (g *GitClient) Branch(name string) error {
 	}
 
 	err = g.Client.CreateBranch(r, branchOpts)
-	branchExistsLocally := errors.As(err, &gogit.ErrBranchExists)
+	branchExistsLocally := errors.Is(err, gogit.ErrBranchExists)
 
 	if err != nil && !branchExistsLocally {
 		return fmt.Errorf("creating branch %s: %v", name, err)
@@ -360,7 +360,8 @@ func (gg *goGit) AddGlob(f string, w *gogit.Worktree) error {
 
 func (gg *goGit) Commit(m string, sig *object.Signature, w *gogit.Worktree) (plumbing.Hash, error) {
 	return w.Commit(m, &gogit.CommitOptions{
-		Author: sig,
+		Author:            sig,
+		AllowEmptyCommits: true,
 	})
 }
 
@@ -417,7 +418,7 @@ func (gg *goGit) CreateBranch(repo *gogit.Repository, config *config.Branch) err
 func (gg *goGit) ListRemotes(r *gogit.Repository, auth transport.AuthMethod) ([]*plumbing.Reference, error) {
 	remote, err := r.Remote(gogit.DefaultRemoteName)
 	if err != nil {
-		if errors.As(err, &gogit.ErrRemoteNotFound) {
+		if errors.Is(err, gogit.ErrRemoteNotFound) {
 			return []*plumbing.Reference{}, nil
 		}
 		return nil, err

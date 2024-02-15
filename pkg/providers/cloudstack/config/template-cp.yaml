@@ -11,12 +11,15 @@ spec:
       cidrBlocks: {{.podCidrs}}
     services:
       cidrBlocks: {{.serviceCidrs}}
+  controlPlaneEndpoint:
+    host: {{.controlPlaneEndpointHost}}
+    port: {{.controlPlaneEndpointPort}}
   controlPlaneRef:
     apiVersion: controlplane.cluster.x-k8s.io/v1beta1
     kind: KubeadmControlPlane
     name: {{.clusterName}}
   infrastructureRef:
-    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta3
     kind: CloudStackCluster
     name: {{.clusterName}}
 {{- if .externalEtcd }}
@@ -26,7 +29,7 @@ spec:
     name: {{.clusterName}}-etcd
 {{- end }}
 ---
-apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta3
 kind: CloudStackCluster
 metadata:
   name: {{.clusterName}}
@@ -35,88 +38,19 @@ spec:
   controlPlaneEndpoint:
     host: {{.controlPlaneEndpointHost}}
     port: {{.controlPlaneEndpointPort}}
-  zones:{{ range $zone := .cloudstackZones }}
-    - network:
-{{- if $zone.Network.Id }}
-        id: {{ $zone.Network.Id}}
-{{- end}}
-{{- if $zone.Network.Name }}
-        name: {{ $zone.Network.Name}}
-{{- end}}
-{{- if $zone.Id }}
-      id: {{ $zone.Id }}
-{{- end}}
-{{- if $zone.Name }}
-      name: {{ $zone.Name }}
-{{- end}}
-{{- end}}
-  {{ if .cloudstackDomain }}domain: {{.cloudstackDomain}}{{- end}}
-  {{ if .cloudstackAccount }}account: {{.cloudstackAccount}}{{- end}}
----
-apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-kind: CloudStackMachineTemplate
-metadata:
-  name: {{.controlPlaneTemplateName}}
-  namespace: {{.eksaSystemNamespace}}
-{{- if .cloudstackControlPlaneAnnotations}}
-  annotations:
-{{- end }}
-{{- if .cloudstackControlPlaneDiskOfferingProvided}}
-    mountpath.diskoffering.{{.cloudstackAnnotationSuffix}}: {{.cloudstackControlPlaneDiskOfferingPath}}
-    device.diskoffering.{{.cloudstackAnnotationSuffix}}: {{.cloudstackControlPlaneDiskOfferingDevice}}
-    filesystem.diskoffering.{{.cloudstackAnnotationSuffix}}: {{.cloudstackControlPlaneDiskOfferingFilesystem}}
-    label.diskoffering.{{.cloudstackAnnotationSuffix}}: {{.cloudstackControlPlaneDiskOfferingLabel}}
-{{- end }}
-{{- if .cloudstackControlPlaneSymlinks }}
-    symlinks.{{.cloudstackAnnotationSuffix}}: {{ $first := true }}{{- range $key, $value := .cloudstackControlPlaneSymlinks}}{{if not $first}},{{else}}{{$first = false}}{{- end}}{{$key}}:{{$value}}{{- end}}
-{{- end}}
-spec:
-  template:
-    spec:
-      offering:
-{{- if .cloudstackControlPlaneComputeOfferingId}}
-        id: {{.cloudstackControlPlaneComputeOfferingId}}
-{{- end}}
-{{- if .cloudstackControlPlaneComputeOfferingName}}
-        name: {{.cloudstackControlPlaneComputeOfferingName}}
-{{- end}}
-      template:
-{{- if .cloudstackControlPlaneTemplateOfferingId}}
-        id: {{.cloudstackControlPlaneTemplateOfferingId}}
-{{- end}}
-{{- if .cloudstackControlPlaneTemplateOfferingName}}
-        name: {{.cloudstackControlPlaneTemplateOfferingName}}
-{{- end}}
-{{- if .cloudstackControlPlaneDiskOfferingProvided}}
-      diskOffering:
-{{- if .cloudstackControlPlaneDiskOfferingId}}
-        id: {{.cloudstackControlPlaneDiskOfferingId}}
-{{- end}}
-{{- if .cloudstackControlPlaneDiskOfferingName}}
-        name: {{.cloudstackControlPlaneDiskOfferingName}}
-{{- end}}
-{{- if gt .cloudstackControlPlaneDiskOfferingCustomSize 0}}
-        customSizeInGB: {{.cloudstackControlPlaneDiskOfferingCustomSize}}
-{{- end}}
-        mountPath: {{.cloudstackControlPlaneDiskOfferingPath}}
-        device: {{.cloudstackControlPlaneDiskOfferingDevice}}
-        filesystem: {{.cloudstackControlPlaneDiskOfferingFilesystem}}
-        label: {{.cloudstackControlPlaneDiskOfferingLabel}}
-{{- end}}
-{{- if .cloudstackControlPlaneCustomDetails }}
-      details:
-{{- range $key, $value := .cloudstackControlPlaneCustomDetails}}
-        {{$key}}: {{$value}}
-{{- end}}
-{{- end}}
-{{- if .cloudstackControlPlaneAffinity }}
-      affinity: '{{ .cloudstackControlPlaneAffinity }}'
-{{- end }}
-{{- if .cloudstackControlPlaneAffinityGroupIds }}
-      affinitygroupids:
-      {{- range .cloudstackControlPlaneAffinityGroupIds}}
-      - {{.}}
-      {{- end }}
+  failureDomains:{{ range $az := .cloudstackAvailabilityZones }}
+  - name: {{ $az.Name }}
+    zone:
+      id: {{ $az.Zone.Id }}
+      name: {{ $az.Zone.Name }}
+      network:
+        id: {{ $az.Zone.Network.Id }}
+        name: {{ $az.Zone.Network.Name }}
+    domain: {{ $az.Domain }}
+    account: {{ $az.Account }}
+    acsEndpoint:
+      name: {{ $az.CredentialsRef }}
+      namespace: eksa-system
 {{- end }}
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1beta1
@@ -127,7 +61,7 @@ metadata:
 spec:
   machineTemplate:
     infrastructureRef:
-      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta3
       kind: CloudStackMachineTemplate
       name: {{.controlPlaneTemplateName}}
   kubeadmConfigSpec:
@@ -153,6 +87,10 @@ spec:
         imageRepository: {{.corednsRepository}}
         imageTag: {{.corednsVersion}}
       apiServer:
+        {{- with .apiServerCertSANs }}
+        certSANs:
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         extraArgs:
           cloud-provider: external
           audit-policy-file: /etc/kubernetes/audit-policy.yaml
@@ -185,6 +123,17 @@ spec:
           name: awsiamcert
           readOnly: false
 {{- end}}
+{{- if .encryptionProviderConfig }}
+        - hostPath: /var/lib/kubeadm/encryption-config.yaml
+          mountPath: /etc/kubernetes/enc/encryption-config.yaml
+          name: encryption-config
+          pathType: File
+          readOnly: true
+        - hostPath: /var/run/kmsplugin/
+          mountPath: /var/run/kmsplugin/
+          name: kms-plugin
+          readOnly: false
+{{- end }}
       controllerManager:
         extraArgs:
           cloud-provider: external
@@ -199,6 +148,12 @@ spec:
 {{ .schedulerExtraArgs.ToYaml | indent 10 }}
 {{- end }}
     files:
+{{- if .encryptionProviderConfig }}
+    - content: |
+{{ .encryptionProviderConfig | indent 8}}
+      owner: root:root
+      path: /var/lib/kubeadm/encryption-config.yaml
+{{- end }}
 {{- if .cloudstackKubeVip}}
     - content: |
         apiVersion: v1
@@ -272,16 +227,23 @@ spec:
     - content: |
 {{ .registryCACert | indent 8 }}
       owner: root:root
-      path: "/etc/containerd/certs.d/{{.registryMirrorConfiguration}}/ca.crt"
+      path: "/etc/containerd/certs.d/{{ .mirrorBase }}/ca.crt"
 {{- end }}
-{{- if .registryMirrorConfiguration }}
+{{- if .registryMirrorMap }}
     - content: |
         [plugins."io.containerd.grpc.v1.cri".registry.mirrors]
-          [plugins."io.containerd.grpc.v1.cri".registry.mirrors."public.ecr.aws"]
-            endpoint = ["https://{{.registryMirrorConfiguration}}"]
+          {{- range $orig, $mirror := .registryMirrorMap }}
+          [plugins."io.containerd.grpc.v1.cri".registry.mirrors."{{ $orig }}"]
+            endpoint = ["https://{{ $mirror }}"]
+          {{- end }}
+          {{- if or .registryCACert .insecureSkip }}
+          [plugins."io.containerd.grpc.v1.cri".registry.configs."{{ .mirrorBase }}".tls]
           {{- if .registryCACert }}
-          [plugins."io.containerd.grpc.v1.cri".registry.configs."{{.registryMirrorConfiguration}}".tls]
-            ca_file = "/etc/containerd/certs.d/{{.registryMirrorConfiguration}}/ca.crt"
+            ca_file = "/etc/containerd/certs.d/{{ .mirrorBase }}/ca.crt"
+          {{- end }}
+          {{- if .insecureSkip }}
+            insecure_skip_verify = {{.insecureSkip}}
+          {{- end }}
           {{- end }}
       owner: root:root
       path: "/etc/containerd/config_append.toml"
@@ -310,14 +272,14 @@ spec:
       path: /var/lib/kubeadm/aws-iam-authenticator/kubeconfig.yaml
     - contentFrom:
         secret:
-          name: aws-iam-authenticator-ca
+          name: {{.clusterName}}-aws-iam-authenticator-ca
           key: cert.pem
       permissions: "0640"
       owner: root:root
       path: /var/lib/kubeadm/aws-iam-authenticator/pki/cert.pem
     - contentFrom:
         secret:
-          name: aws-iam-authenticator-ca
+          name: {{.clusterName}}-aws-iam-authenticator-ca
           key: key.pem
       permissions: "0640"
       owner: root:root
@@ -333,7 +295,7 @@ spec:
 {{- if .kubeletExtraArgs }}
 {{ .kubeletExtraArgs.ToYaml | indent 10 }}
 {{- end }}
-        name: '{{`{{ ds.meta_data.local_hostname }}`}}'
+        name: "{{`{{ ds.meta_data.hostname }}`}}"
 {{- if .controlPlaneTaints }}
         taints:
 {{- range .controlPlaneTaints}}
@@ -344,8 +306,6 @@ spec:
           timeAdded: {{ .TimeAdded }}
 {{- end }}
 {{- end }}
-{{- else}}
-        taints: []
 {{- end }}
     joinConfiguration:
       nodeRegistration:
@@ -357,7 +317,7 @@ spec:
 {{- if .kubeletExtraArgs }}
 {{ .kubeletExtraArgs.ToYaml | indent 10 }}
 {{- end }}
-        name: '{{`{{ ds.meta_data.local_hostname }}`}}'
+        name: "{{`{{ ds.meta_data.hostname }}`}}"
 {{- if .controlPlaneTaints }}
         taints:
 {{- range .controlPlaneTaints}}
@@ -368,23 +328,21 @@ spec:
           timeAdded: {{ .TimeAdded }}
 {{- end }}
 {{- end }}
-{{- else}}
-        taints: []
 {{- end }}
     preKubeadmCommands:
     - swapoff -a
-{{- if.registryMirrorConfiguration }}
+{{- if.registryMirrorMap }}
     - cat /etc/containerd/config_append.toml >> /etc/containerd/config.toml
 {{- end }}
-{{- if or .proxyConfig .registryMirrorConfiguration }}
+{{- if or .proxyConfig .registryMirrorMap }}
     - sudo systemctl daemon-reload
     - sudo systemctl restart containerd
 {{- end }}
-    - hostname "{{`{{ ds.meta_data.local_hostname }}`}}"
+    - hostname "{{`{{ ds.meta_data.hostname }}`}}"
     - echo "::1         ipv6-localhost ipv6-loopback" >/etc/hosts
     - echo "127.0.0.1   localhost" >>/etc/hosts
-    - echo "127.0.0.1   {{`{{ ds.meta_data.local_hostname }}`}}" >>/etc/hosts
-    - echo "{{`{{ ds.meta_data.local_hostname }}`}}" >/etc/hostname
+    - echo "127.0.0.1   {{`{{ ds.meta_data.hostname }}`}}" >>/etc/hosts
+    - echo "{{`{{ ds.meta_data.hostname }}`}}" >/etc/hostname
 {{- range $dir, $target := .cloudstackControlPlaneSymlinks}}
     - >-
       if [ ! -L {{$dir}} ] ;
@@ -394,6 +352,10 @@ spec:
         else echo "{{$dir}} already symlnk";
       fi
 {{- end}}
+{{- $kube_minor_version := (index (splitList "." (trimPrefix "v" .kubernetesVersion)) 1) }}
+{{- if (ge (atoi $kube_minor_version) 29) }}
+    - "if [ -f /run/kubeadm/kubeadm.yaml ]; then sed -i 's#path: /etc/kubernetes/admin.conf#path: /etc/kubernetes/super-admin.conf#' /etc/kubernetes/manifests/kube-vip.yaml; fi"
+{{- end }}
 {{- if .cloudstackControlPlaneDiskOfferingProvided }}
     diskSetup:
       filesystems:
@@ -421,6 +383,11 @@ spec:
       sudo: ALL=(ALL) NOPASSWD:ALL
     format: {{.format}}
   replicas: {{.controlPlaneReplicas}}
+  {{- if .upgradeRolloutStrategy }}
+  rolloutStrategy:
+    rollingUpdate:
+      maxSurge: {{.maxSurge}}
+  {{- end }}
   version: {{.kubernetesVersion}}
 {{- if .externalEtcd }}
 ---
@@ -437,6 +404,9 @@ spec:
     cloudInitConfig:
       version: {{.externalEtcdVersion}}
       installDir: "/usr/bin"
+{{- if .externalEtcdReleaseUrl }}
+      etcdReleaseURL: {{.externalEtcdReleaseUrl}}
+{{- end }}
     etcdadmInstallCommands:
       - echo this line exists so that etcdadmInstallCommands is not empty
       - echo etcdadmInstallCommands can be removed once etcdadm bootstrap and controller fix the bug
@@ -444,11 +414,11 @@ spec:
       - echo https://github.com/mrajashree/etcdadm-bootstrap-provider/issues/13
     preEtcdadmCommands:
     - swapoff -a
-    - hostname "{{`{{ ds.meta_data.local_hostname }}`}}"
+    - hostname "{{`{{ ds.meta_data.hostname }}`}}"
     - echo "::1         ipv6-localhost ipv6-loopback" >/etc/hosts
     - echo "127.0.0.1   localhost" >>/etc/hosts
-    - echo "127.0.0.1   {{`{{ ds.meta_data.local_hostname }}`}}" >>/etc/hosts
-    - echo "{{`{{ ds.meta_data.local_hostname }}`}}" >/etc/hostname
+    - echo "127.0.0.1   {{`{{ ds.meta_data.hostname }}`}}" >>/etc/hosts
+    - echo "{{`{{ ds.meta_data.hostname }}`}}" >/etc/hostname
 {{- if .cloudstackEtcdDiskOfferingProvided }}
     - >-
       echo "type=83" | sfdisk {{ .cloudstackEtcdDiskOfferingDevice }} &&
@@ -483,82 +453,17 @@ spec:
         - {{ . }}
       {{- end }}
 {{- end }}
-{{- if .registryMirrorConfiguration }}
+{{- if .registryMirrorMap }}
     registryMirror:
-      endpoint: {{.registryMirrorConfiguration}}
+      endpoint: {{ .publicMirror }}
       {{- if .registryCACert }}
       caCert: |
 {{ .registryCACert | indent 8 }}
       {{- end }}
 {{- end }}
   infrastructureTemplate:
-    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta3
     kind: CloudStackMachineTemplate
     name: {{.etcdTemplateName}}
+{{- end }}
 ---
-apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-kind: CloudStackMachineTemplate
-metadata:
-  name: {{.etcdTemplateName}}
-  namespace: '{{.eksaSystemNamespace}}'
-{{- if .cloudstackEtcdAnnotations}}
-  annotations:
-{{- end }}
-{{- if .cloudstackEtcdDiskOfferingProvided}}
-    mountpath.diskoffering.{{.cloudstackAnnotationSuffix}}: {{.cloudstackEtcdDiskOfferingPath}}
-    device.diskoffering.{{.cloudstackAnnotationSuffix}}: {{.cloudstackEtcdDiskOfferingDevice}}
-    filesystem.diskoffering.{{.cloudstackAnnotationSuffix}}: {{.cloudstackEtcdDiskOfferingFilesystem}}
-    label.diskoffering.{{.cloudstackAnnotationSuffix}}: {{.cloudstackEtcdDiskOfferingLabel}}
-{{- end }}
-{{- if .cloudstackEtcdSymlinks }}
-    symlinks.{{.cloudstackAnnotationSuffix}}: {{ $first := true }}{{- range $key, $value := .cloudstackEtcdSymlinks}}{{if not $first}},{{else}}{{$first = false}}{{- end}}{{$key}}:{{$value}}{{- end}}
-{{- end}}
-spec:
-  template:
-    spec:
-      offering:
-{{- if .cloudstackEtcdComputeOfferingId}}
-        id: {{.cloudstackEtcdComputeOfferingId}}
-{{- end}}
-{{- if .cloudstackEtcdComputeOfferingName}}
-        name: {{.cloudstackEtcdComputeOfferingName}}
-{{- end}}
-      template:
-{{- if .cloudstackEtcdTemplateOfferingId}}
-        id: {{.cloudstackEtcdTemplateOfferingId}}
-{{- end}}
-{{- if .cloudstackEtcdTemplateOfferingName}}
-        name: {{.cloudstackEtcdTemplateOfferingName}}
-{{- end}}
-{{- if .cloudstackEtcdDiskOfferingProvided}}
-      diskOffering:
-{{- if .cloudstackEtcdDiskOfferingId}}
-        id: {{.cloudstackEtcdDiskOfferingId}}
-{{- end}}
-{{- if .cloudstackEtcdDiskOfferingName}}
-        name: {{.cloudstackEtcdDiskOfferingName}}
-{{- end}}
-{{- if gt .cloudstackEtcdDiskOfferingCustomSize 0}}
-        customSizeInGB: {{.cloudstackEtcdDiskOfferingCustomSize}}
-{{- end}}
-        mountPath: {{.cloudstackEtcdDiskOfferingPath}}
-        device: {{.cloudstackEtcdDiskOfferingDevice}}
-        filesystem: {{.cloudstackEtcdDiskOfferingFilesystem}}
-        label: {{.cloudstackEtcdDiskOfferingLabel}}
-{{- end}}
-{{- if .cloudstackEtcdCustomDetails }}
-      details:
-{{- range $key, $value := .cloudstackEtcdCustomDetails}}
-        {{$key}}: {{$value}}
-{{- end}}
-{{- end}}
-{{- if .cloudstackEtcdAffinity }}
-      affinity: '{{ .cloudstackEtcdAffinity }}'
-{{- end }}
-{{- if .cloudstackEtcdAffinityGroupIds }}
-      affinitygroupids:
-      {{- range .cloudstackEtcdAffinityGroupIds }}
-      - {{.}}
-      {{- end }}
-{{- end }}
-{{- end }}

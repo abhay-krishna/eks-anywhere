@@ -31,7 +31,8 @@ type DiagnosticBundle interface {
 	CollectAndAnalyze(ctx context.Context, sinceTimeValue *time.Time) error
 	WithDefaultAnalyzers() *EksaDiagnosticBundle
 	WithDefaultCollectors() *EksaDiagnosticBundle
-	WithDatacenterConfig(config v1alpha1.Ref) *EksaDiagnosticBundle
+	WithFileCollectors(paths []string) *EksaDiagnosticBundle
+	WithDatacenterConfig(config v1alpha1.Ref, spec *cluster.Spec) *EksaDiagnosticBundle
 	WithOidcConfig(config *v1alpha1.OIDCConfig) *EksaDiagnosticBundle
 	WithExternalEtcd(config *v1alpha1.ExternalEtcdConfiguration) *EksaDiagnosticBundle
 	WithGitOpsConfig(config *v1alpha1.GitOpsConfig) *EksaDiagnosticBundle
@@ -50,10 +51,12 @@ type AnalyzerFactory interface {
 	PackageAnalyzers() []*Analyze
 }
 
+// CollectorFactory generates support-bundle collectors.
 type CollectorFactory interface {
 	PackagesCollectors() []*Collect
 	DefaultCollectors() []*Collect
+	FileCollectors(paths []string) []*Collect
 	ManagementClusterCollectors() []*Collect
 	EksaHostCollectors(configs []providers.MachineConfig) []*Collect
-	DataCenterConfigCollectors(datacenter v1alpha1.Ref) []*Collect
+	DataCenterConfigCollectors(datacenter v1alpha1.Ref, spec *cluster.Spec) []*Collect
 }

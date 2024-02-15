@@ -12,63 +12,6 @@ import (
 	"github.com/aws/eks-anywhere/pkg/constants"
 )
 
-// DiskExtractor represents a hardware labels and map it with the appropriate disk given in the hardware csv file
-type DiskExtractor struct {
-	selector map[string]eksav1alpha1.HardwareSelector
-	disks    map[string]string
-}
-
-// NewDiskExtractor creates a DiskExtractor instance.
-func NewDiskExtractor() *DiskExtractor {
-	return &DiskExtractor{
-		selector: make(map[string]eksav1alpha1.HardwareSelector),
-		disks:    make(map[string]string),
-	}
-}
-
-// Write matches m to registered hardware selectors and caches the disk for a given selector.
-// If subsequent Machine matches are made for a given selector, the disk from the first Machine
-// match is used.
-func (d *DiskExtractor) Write(m Machine) error {
-	for key, selector := range d.selector {
-		if _, ok := d.disks[key]; !ok && LabelsMatchSelector(selector, m.Labels) {
-			d.disks[key] = m.Disk
-		}
-	}
-
-	return nil
-}
-
-// Register registers selector with d such that a disk can be cached when
-// machines are written to Write().
-func (d *DiskExtractor) Register(selector eksav1alpha1.HardwareSelector) error {
-	key, err := serializeHardwareSelector(selector)
-	if err != nil {
-		return err
-	}
-
-	if _, ok := d.selector[key]; !ok {
-		d.selector[key] = selector
-	}
-
-	return nil
-}
-
-// GetDisk returns the disk cached for selector. If selector has no disk cached ErrDiskNotFound
-// is returned.
-func (d *DiskExtractor) GetDisk(selector eksav1alpha1.HardwareSelector) (string, error) {
-	key, err := serializeHardwareSelector(selector)
-	if err != nil {
-		return "", err
-	}
-
-	if _, ok := d.disks[key]; !ok {
-		return "", ErrDiskNotFound{key}
-	}
-
-	return d.disks[key], nil
-}
-
 // serializeHardwareSelector returns a key for use in a map unique selector.
 func serializeHardwareSelector(selector eksav1alpha1.HardwareSelector) (string, error) {
 	return selector.ToString()
@@ -102,6 +45,34 @@ func (c *Catalogue) InsertHardware(hardware *tinkv1alpha1.Hardware) error {
 	}
 	c.hardware = append(c.hardware, hardware)
 	return nil
+}
+
+// RemoveHardwares removes a slice of hardwares from the catalogue.
+func (c *Catalogue) RemoveHardwares(hardware []tinkv1alpha1.Hardware) error {
+	m := make(map[string]bool, len(hardware))
+	for _, hw := range hardware {
+		m[getRemoveKey(hw)] = true
+	}
+
+	diff := []*tinkv1alpha1.Hardware{}
+	for i, hw := range c.hardware {
+		key := getRemoveKey(*hw)
+		if _, ok := m[key]; !ok {
+			diff = append(diff, c.hardware[i])
+		} else {
+			if err := c.hardwareIndex.Remove(c.hardware[i]); err != nil {
+				return err
+			}
+		}
+	}
+
+	c.hardware = diff
+	return nil
+}
+
+// getRemoveKey returns key used to search and remove hardware.
+func getRemoveKey(hardware tinkv1alpha1.Hardware) string {
+	return hardware.Name + ":" + hardware.Namespace
 }
 
 // AllHardware retrieves a copy of the catalogued Hardware instances.
@@ -218,7 +189,6 @@ func hardwareFromMachine(m Machine) *tinkv1alpha1.Hardware {
 					AllowPxe:        true,
 					AlwaysPxe:       true,
 				},
-				State: "provisioning",
 			},
 			Interfaces: []tinkv1alpha1.Interface{
 				{
@@ -242,6 +212,7 @@ func hardwareFromMachine(m Machine) *tinkv1alpha1.Hardware {
 						Hostname:    m.Hostname,
 						NameServers: m.Nameservers,
 						UEFI:        true,
+						VLANID:      m.VLANID,
 					},
 				},
 			},

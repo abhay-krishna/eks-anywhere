@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/aws/eks-anywhere/pkg/files"
 	"github.com/aws/eks-anywhere/pkg/logger"
+	"github.com/aws/eks-anywhere/pkg/manifests/bundles"
 	"github.com/aws/eks-anywhere/pkg/version"
 	releasev1 "github.com/aws/eks-anywhere/release/api/v1alpha1"
 )
 
 type Reader interface {
 	ReadBundlesForVersion(eksaVersion string) (*releasev1.Bundles, error)
-	ReadImagesFromBundles(bundles *releasev1.Bundles) ([]releasev1.Image, error)
+	ReadImagesFromBundles(ctx context.Context, bundles *releasev1.Bundles) ([]releasev1.Image, error)
 	ReadChartsFromBundles(ctx context.Context, bundles *releasev1.Bundles) []releasev1.Image
 }
 
@@ -34,6 +36,7 @@ type Packager interface {
 
 type Download struct {
 	Reader                   Reader
+	FileReader               *files.Reader
 	Version                  version.Info
 	BundlesImagesDownloader  ImageMover
 	EksaToolsImageDownloader ImageMover
@@ -42,15 +45,26 @@ type Download struct {
 	TmpDowloadFolder         string
 	DstFile                  string
 	ManifestDownloader       ManifestDownloader
+	BundlesOverride          string
 }
 
 func (d Download) Run(ctx context.Context) error {
 	if err := os.MkdirAll(d.TmpDowloadFolder, os.ModePerm); err != nil {
 		return fmt.Errorf("creating tmp artifact download folder: %v", err)
 	}
-	b, err := d.Reader.ReadBundlesForVersion(d.Version.GitVersion)
-	if err != nil {
-		return fmt.Errorf("downloading images: %v", err)
+
+	var b *releasev1.Bundles
+	var err error
+	if d.BundlesOverride != "" {
+		b, err = bundles.Read(d.FileReader, d.BundlesOverride)
+		if err != nil {
+			return fmt.Errorf("reading bundles override: %v", err)
+		}
+	} else {
+		b, err = d.Reader.ReadBundlesForVersion(d.Version.GitVersion)
+		if err != nil {
+			return fmt.Errorf("reading bundles for version %s: %v", d.Version.GitVersion, err)
+		}
 	}
 
 	toolsImage := b.DefaultEksAToolsImage().VersionedImage()
@@ -58,7 +72,7 @@ func (d Download) Run(ctx context.Context) error {
 		return fmt.Errorf("downloading eksa tools image: %v", err)
 	}
 
-	images, err := d.Reader.ReadImagesFromBundles(b)
+	images, err := d.Reader.ReadImagesFromBundles(ctx, b)
 	if err != nil {
 		return fmt.Errorf("downloading images: %v", err)
 	}

@@ -3,6 +3,8 @@ package clusterapi_test
 import (
 	"testing"
 
+	etcdbootstrapv1 "github.com/aws/etcdadm-bootstrap-provider/api/v1beta1"
+	etcdv1 "github.com/aws/etcdadm-controller/api/v1beta1"
 	. "github.com/onsi/gomega"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,6 +17,8 @@ import (
 	anywherev1 "github.com/aws/eks-anywhere/pkg/api/v1alpha1"
 	"github.com/aws/eks-anywhere/pkg/cluster"
 	"github.com/aws/eks-anywhere/pkg/clusterapi"
+	"github.com/aws/eks-anywhere/pkg/utils/ptr"
+	"github.com/aws/eks-anywhere/release/api/v1alpha1"
 )
 
 type apiBuilerTest struct {
@@ -25,6 +29,7 @@ type apiBuilerTest struct {
 	providerCluster         clusterapi.APIObject
 	controlPlane            clusterapi.APIObject
 	providerMachineTemplate clusterapi.APIObject
+	unstackedEtcdCluster    clusterapi.APIObject
 }
 
 type providerCluster struct {
@@ -42,6 +47,15 @@ type providerMachineTemplate struct {
 }
 
 func (c *providerMachineTemplate) DeepCopyObject() runtime.Object {
+	return nil
+}
+
+type unstackedEtcdCluster struct {
+	metav1.TypeMeta
+	metav1.ObjectMeta
+}
+
+func (c *unstackedEtcdCluster) DeepCopyObject() runtime.Object {
 	return nil
 }
 
@@ -82,16 +96,51 @@ func newApiBuilerTest(t *testing.T) apiBuilerTest {
 						"key1": "val1",
 						"key2": "val2",
 					},
+					CertSANs: []string{"foo.bar", "11.11.11.11"},
 				},
 				KubernetesVersion: "1.21",
 			},
 		}
-		s.VersionsBundle.KubeDistro.Kubernetes.Repository = "public.ecr.aws/eks-distro/kubernetes"
-		s.VersionsBundle.KubeDistro.Kubernetes.Tag = "v1.21.5-eks-1-21-9"
-		s.VersionsBundle.KubeDistro.CoreDNS.Repository = "public.ecr.aws/eks-distro/coredns"
-		s.VersionsBundle.KubeDistro.CoreDNS.Tag = "v1.8.4-eks-1-21-9"
-		s.VersionsBundle.KubeDistro.Etcd.Repository = "public.ecr.aws/eks-distro/etcd-io"
-		s.VersionsBundle.KubeDistro.Etcd.Tag = "v3.4.16-eks-1-21-9"
+
+		s.VersionsBundles = map[anywherev1.KubernetesVersion]*cluster.VersionsBundle{
+			"1.21": {
+				KubeDistro: &cluster.KubeDistro{
+					Kubernetes: cluster.VersionedRepository{
+						Repository: "public.ecr.aws/eks-distro/kubernetes",
+						Tag:        "v1.21.5-eks-1-21-9",
+					},
+					CoreDNS: cluster.VersionedRepository{
+						Repository: "public.ecr.aws/eks-distro/coredns",
+						Tag:        "v1.8.4-eks-1-21-9",
+					},
+					Etcd: cluster.VersionedRepository{
+						Repository: "public.ecr.aws/eks-distro/etcd-io",
+						Tag:        "v3.4.16-eks-1-21-9",
+					},
+					EtcdImage: v1alpha1.Image{
+						URI: "public.ecr.aws/eks-distro/etcd-io/etcd:0.0.1",
+					},
+					EtcdURL:     "https://distro.eks.amazonaws.com/kubernetes-1-19/releases/4/artifacts/etcd/v3.4.14/etcd-linux-amd64-v3.4.14.tar.gz",
+					EtcdVersion: "3.4.14",
+					Pause: v1alpha1.Image{
+						URI: "public.ecr.aws/eks-distro/kubernetes/pause:0.0.1",
+					},
+				},
+				VersionsBundle: &v1alpha1.VersionsBundle{
+					BottleRocketHostContainers: v1alpha1.BottlerocketHostContainersBundle{
+						Admin: v1alpha1.Image{
+							URI: "public.ecr.aws/eks-anywhere/bottlerocket-admin:0.0.1",
+						},
+						Control: v1alpha1.Image{
+							URI: "public.ecr.aws/eks-anywhere/bottlerocket-control:0.0.1",
+						},
+						KubeadmBootstrap: v1alpha1.Image{
+							URI: "public.ecr.aws/eks-anywhere/bottlerocket-bootstrap:0.0.1",
+						},
+					},
+				},
+			},
+		}
 	})
 
 	controlPlane := &controlplanev1.KubeadmControlPlane{
@@ -106,7 +155,7 @@ func newApiBuilerTest(t *testing.T) apiBuilerTest {
 
 	workerNodeGroupConfig := &anywherev1.WorkerNodeGroupConfiguration{
 		Name:  "wng-1",
-		Count: 3,
+		Count: ptr.Int(3),
 		Taints: []v1.Taint{
 			{
 				Key:       "key2",
@@ -150,6 +199,16 @@ func newApiBuilerTest(t *testing.T) apiBuilerTest {
 		},
 	}
 
+	unstackedEtcdCluster := &unstackedEtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "unstacked-etcd-cluster",
+		},
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "UnstackedEtcdCluster",
+			APIVersion: "etcdcluster.cluster.x-k8s.io/v1beta1",
+		},
+	}
+
 	return apiBuilerTest{
 		WithT:                   NewWithT(t),
 		clusterSpec:             clusterSpec,
@@ -158,14 +217,12 @@ func newApiBuilerTest(t *testing.T) apiBuilerTest {
 		providerCluster:         providerCluster,
 		controlPlane:            controlPlane,
 		providerMachineTemplate: providerMachineTemplate,
+		unstackedEtcdCluster:    unstackedEtcdCluster,
 	}
 }
 
-// TODO: add unstacked etcd test
-func TestCluster(t *testing.T) {
-	tt := newApiBuilerTest(t)
-	got := clusterapi.Cluster(tt.clusterSpec, tt.providerCluster, tt.controlPlane)
-	want := &clusterv1.Cluster{
+func wantCluster() *clusterv1.Cluster {
+	return &clusterv1.Cluster{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "cluster.x-k8s.io/v1beta1",
 			Kind:       "Cluster",
@@ -204,12 +261,20 @@ func TestCluster(t *testing.T) {
 			},
 		},
 	}
+}
+
+func TestCluster(t *testing.T) {
+	tt := newApiBuilerTest(t)
+	got := clusterapi.Cluster(tt.clusterSpec, tt.providerCluster, tt.controlPlane, nil)
+	want := wantCluster()
 	tt.Expect(got).To(Equal(want))
 }
 
-func wantKubeadmControlPlane() *controlplanev1.KubeadmControlPlane {
+type kubeadmControlPlaneOpt func(k *controlplanev1.KubeadmControlPlane)
+
+func wantKubeadmControlPlane(opts ...kubeadmControlPlaneOpt) *controlplanev1.KubeadmControlPlane {
 	replicas := int32(3)
-	return &controlplanev1.KubeadmControlPlane{
+	kcp := &controlplanev1.KubeadmControlPlane{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "controlplane.cluster.x-k8s.io/v1beta1",
 			Kind:       "KubeadmControlPlane",
@@ -241,7 +306,9 @@ func wantKubeadmControlPlane() *controlplanev1.KubeadmControlPlane {
 								ImageRepository: "public.ecr.aws/eks-distro/etcd-io",
 								ImageTag:        "v3.4.16-eks-1-21-9",
 							},
-							ExtraArgs: map[string]string{},
+							ExtraArgs: map[string]string{
+								"cipher-suites": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+							},
 						},
 					},
 					APIServer: bootstrapv1.APIServer{
@@ -249,9 +316,15 @@ func wantKubeadmControlPlane() *controlplanev1.KubeadmControlPlane {
 							ExtraArgs:    map[string]string{},
 							ExtraVolumes: []bootstrapv1.HostPathMount{},
 						},
+						CertSANs: []string{"foo.bar", "11.11.11.11"},
 					},
 					ControllerManager: bootstrapv1.ControlPlaneComponent{
-						ExtraArgs: tlsCipherSuitesArgs(),
+						ExtraArgs:    tlsCipherSuitesArgs(),
+						ExtraVolumes: []bootstrapv1.HostPathMount{},
+					},
+					Scheduler: bootstrapv1.ControlPlaneComponent{
+						ExtraArgs:    map[string]string{},
+						ExtraVolumes: []bootstrapv1.HostPathMount{},
 					},
 				},
 				InitConfiguration: &bootstrapv1.InitConfiguration{
@@ -294,9 +367,14 @@ func wantKubeadmControlPlane() *controlplanev1.KubeadmControlPlane {
 			Version:  "v1.21.5-eks-1-21-9",
 		},
 	}
+
+	for _, opt := range opts {
+		opt(kcp)
+	}
+
+	return kcp
 }
 
-// TODO: add unstacked etcd test
 func TestKubeadmControlPlane(t *testing.T) {
 	tt := newApiBuilerTest(t)
 	got, err := clusterapi.KubeadmControlPlane(tt.clusterSpec, tt.providerMachineTemplate)
@@ -326,6 +404,7 @@ func wantKubeadmConfigTemplate() *bootstrapv1.KubeadmConfigTemplate {
 							ControlPlaneComponent: bootstrapv1.ControlPlaneComponent{
 								ExtraArgs: map[string]string{},
 							},
+							CertSANs: []string{"foo.bar", "11.11.11.11"},
 						},
 					},
 					JoinConfiguration: &bootstrapv1.JoinConfiguration{
@@ -360,12 +439,12 @@ func TestKubeadmConfigTemplate(t *testing.T) {
 	tt.Expect(got).To(Equal(want))
 }
 
-func TestMachineDeployment(t *testing.T) {
-	tt := newApiBuilerTest(t)
-	got := clusterapi.MachineDeployment(tt.clusterSpec, *tt.workerNodeGroupConfig, tt.kubeadmConfigTemplate, tt.providerMachineTemplate)
+type machineDeploymentOpt func(m *clusterv1.MachineDeployment)
+
+func wantMachineDeployment(opts ...machineDeploymentOpt) *clusterv1.MachineDeployment {
 	replicas := int32(3)
 	version := "v1.21.5-eks-1-21-9"
-	want := clusterv1.MachineDeployment{
+	md := &clusterv1.MachineDeployment{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "cluster.x-k8s.io/v1beta1",
 			Kind:       "MachineDeployment",
@@ -378,6 +457,7 @@ func TestMachineDeployment(t *testing.T) {
 				"cluster.anywhere.eks.amazonaws.com/cluster-name":      "test-cluster",
 				"cluster.anywhere.eks.amazonaws.com/cluster-namespace": "my-namespace",
 			},
+			Annotations: map[string]string{},
 		},
 		Spec: clusterv1.MachineDeploymentSpec{
 			ClusterName: "test-cluster",
@@ -410,7 +490,18 @@ func TestMachineDeployment(t *testing.T) {
 			Replicas: &replicas,
 		},
 	}
-	tt.Expect(got).To(Equal(want))
+
+	for _, opt := range opts {
+		opt(md)
+	}
+
+	return md
+}
+
+func TestMachineDeployment(t *testing.T) {
+	tt := newApiBuilerTest(t)
+	got := clusterapi.MachineDeployment(tt.clusterSpec, *tt.workerNodeGroupConfig, tt.kubeadmConfigTemplate, tt.providerMachineTemplate)
+	tt.Expect(got).To(BeComparableTo(wantMachineDeployment()))
 }
 
 func TestClusterName(t *testing.T) {
@@ -440,4 +531,41 @@ func TestClusterName(t *testing.T) {
 			g.Expect(clusterapi.ClusterName(tt.cluster)).To(Equal(tt.want))
 		})
 	}
+}
+
+func wantEtcdCluster() *etcdv1.EtcdadmCluster {
+	replicas := int32(3)
+	return &etcdv1.EtcdadmCluster{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "etcdcluster.cluster.x-k8s.io/v1beta1",
+			Kind:       "EtcdadmCluster",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster-etcd",
+			Namespace: "eksa-system",
+		},
+		Spec: etcdv1.EtcdadmClusterSpec{
+			Replicas: &replicas,
+			EtcdadmConfigSpec: etcdbootstrapv1.EtcdadmConfigSpec{
+				EtcdadmBuiltin:     true,
+				CipherSuites:       "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+				PreEtcdadmCommands: []string{},
+			},
+			InfrastructureTemplate: v1.ObjectReference{
+				APIVersion: "infrastructure.cluster.x-k8s.io/v1beta1",
+				Kind:       "ProviderMachineTemplate",
+				Name:       "provider-template",
+			},
+		},
+	}
+}
+
+func TestEtcdadmCluster(t *testing.T) {
+	tt := newApiBuilerTest(t)
+	tt.clusterSpec.Cluster.Spec.ExternalEtcdConfiguration = &anywherev1.ExternalEtcdConfiguration{
+		Count: 3,
+	}
+	got := clusterapi.EtcdadmCluster(tt.clusterSpec, tt.providerMachineTemplate)
+	want := wantEtcdCluster()
+	tt.Expect(got).To(Equal(want))
 }

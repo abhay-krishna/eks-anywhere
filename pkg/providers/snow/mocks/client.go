@@ -36,18 +36,18 @@ func (m *MockKubeUnAuthClient) EXPECT() *MockKubeUnAuthClientMockRecorder {
 	return m.recorder
 }
 
-// Delete mocks base method.
-func (m *MockKubeUnAuthClient) Delete(ctx context.Context, name, namespace, kubeconfig string, obj runtime.Object) error {
+// Apply mocks base method.
+func (m *MockKubeUnAuthClient) Apply(ctx context.Context, kubeconfig string, obj runtime.Object) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Delete", ctx, name, namespace, kubeconfig, obj)
+	ret := m.ctrl.Call(m, "Apply", ctx, kubeconfig, obj)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// Delete indicates an expected call of Delete.
-func (mr *MockKubeUnAuthClientMockRecorder) Delete(ctx, name, namespace, kubeconfig, obj interface{}) *gomock.Call {
+// Apply indicates an expected call of Apply.
+func (mr *MockKubeUnAuthClientMockRecorder) Apply(ctx, kubeconfig, obj interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockKubeUnAuthClient)(nil).Delete), ctx, name, namespace, kubeconfig, obj)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Apply", reflect.TypeOf((*MockKubeUnAuthClient)(nil).Apply), ctx, kubeconfig, obj)
 }
 
 // KubeconfigClient mocks base method.

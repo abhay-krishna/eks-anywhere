@@ -90,6 +90,10 @@ func (a *analyzerFactory) managementClusterDeploymentAnalyzers() []*Analyze {
 			Namespace:        constants.CapcSystemNamespace,
 			ExpectedReplicas: 1,
 		}, {
+			Name:             "capx-controller-manager",
+			Namespace:        constants.CapxSystemNamespace,
+			ExpectedReplicas: 1,
+		}, {
 			Name:             "cert-manager-webhook",
 			Namespace:        constants.CertManagerNamespace,
 			ExpectedReplicas: 1,
@@ -159,17 +163,24 @@ func (a *analyzerFactory) DataCenterConfigAnalyzers(datacenter v1alpha1.Ref) []*
 		return a.eksaDockerAnalyzers()
 	case v1alpha1.CloudStackDatacenterKind:
 		return a.eksaCloudstackAnalyzers()
+	case v1alpha1.SnowDatacenterKind:
+		return a.eksaSnowAnalyzers()
+	case v1alpha1.NutanixDatacenterKind:
+		return a.eksaNutanixAnalyzers()
 	default:
 		return nil
 	}
 }
 
 func (a *analyzerFactory) eksaVsphereAnalyzers() []*Analyze {
+	var analyzers []*Analyze
 	crds := []string{
 		fmt.Sprintf("vspheredatacenterconfigs.%s", v1alpha1.GroupVersion.Group),
 		fmt.Sprintf("vspheremachineconfigs.%s", v1alpha1.GroupVersion.Group),
 	}
-	return a.generateCrdAnalyzers(crds)
+	analyzers = append(analyzers, a.generateCrdAnalyzers(crds)...)
+	analyzers = append(analyzers, a.vsphereDiagnosticAnalyzers()...)
+	return analyzers
 }
 
 func (a *analyzerFactory) eksaCloudstackAnalyzers() []*Analyze {
@@ -177,7 +188,17 @@ func (a *analyzerFactory) eksaCloudstackAnalyzers() []*Analyze {
 		fmt.Sprintf("cloudstackdatacenterconfigs.%s", v1alpha1.GroupVersion.Group),
 		fmt.Sprintf("cloudstackmachineconfigs.%s", v1alpha1.GroupVersion.Group),
 	}
-	return a.generateCrdAnalyzers(crds)
+	analyzers := a.generateCrdAnalyzers(crds)
+	return append(analyzers, a.validControlPlaneIPAnalyzer())
+}
+
+func (a *analyzerFactory) eksaSnowAnalyzers() []*Analyze {
+	crds := []string{
+		fmt.Sprintf("snowdatacenterconfigs.%s", v1alpha1.GroupVersion.Group),
+		fmt.Sprintf("snowmachineconfigs.%s", v1alpha1.GroupVersion.Group),
+	}
+	analyzers := a.generateCrdAnalyzers(crds)
+	return append(analyzers, a.validControlPlaneIPAnalyzer())
 }
 
 func (a *analyzerFactory) eksaDockerAnalyzers() []*Analyze {
@@ -199,8 +220,17 @@ func (a *analyzerFactory) eksaDockerAnalyzers() []*Analyze {
 	return append(analyazers, a.generateDeploymentAnalyzers(deployments)...)
 }
 
+func (a *analyzerFactory) eksaNutanixAnalyzers() []*Analyze {
+	crds := []string{
+		fmt.Sprintf("nutanixdatacenterconfigs.%s", v1alpha1.GroupVersion.Group),
+		fmt.Sprintf("nutanixmachineconfigs.%s", v1alpha1.GroupVersion.Group),
+	}
+	analyzers := a.generateCrdAnalyzers(crds)
+	return append(analyzers, a.validControlPlaneIPAnalyzer())
+}
+
 // EksaLogTextAnalyzers given a slice of Collectors will check which namespaced log collectors are present
-// and return the log analyzers associated with the namespace in the namespaceLogTextAnalyzersMap
+// and return the log analyzers associated with the namespace in the namespaceLogTextAnalyzersMap.
 func (a *analyzerFactory) EksaLogTextAnalyzers(collectors []*Collect) []*Analyze {
 	var analyzers []*Analyze
 	analyzersMap := a.namespaceLogTextAnalyzersMap()
@@ -317,6 +347,106 @@ func (a *analyzerFactory) crdAnalyzer(crdName string) *Analyze {
 				},
 			},
 			CustomResourceDefinitionName: crdName,
+		},
+	}
+}
+
+// vsphereDiagnosticAnalyzers will return diagnostic analyzers to analyze the condition of vSphere cluster.
+func (a *analyzerFactory) vsphereDiagnosticAnalyzers() []*Analyze {
+	return []*Analyze{a.validControlPlaneIPAnalyzer(), a.vcenterSessionValidatePermissionAnalyzer()}
+}
+
+// validControlPlaneIPAnalyzer analyzes whether a valid control plane IP is used to connect
+// to API server.
+func (a *analyzerFactory) validControlPlaneIPAnalyzer() *Analyze {
+	runPingPod := "ping-host-ip"
+	runPingPodLog := fmt.Sprintf("%s.log", runPingPod)
+	fullRunPingPodLogPath := path.Join(runPingPod, runPingPodLog)
+	return &Analyze{
+		TextAnalyze: &textAnalyze{
+			analyzeMeta: analyzeMeta{
+				CheckName: fmt.Sprintf("%s:  Destination Host Unreachable. Log: %s", logAnalysisAnalyzerPrefix, fullRunPingPodLogPath),
+			},
+			FileName:     fullRunPingPodLogPath,
+			RegexPattern: `exit code: 0`,
+			Outcomes: []*outcome{
+				{
+					Fail: &singleOutcome{
+						When:    "false",
+						Message: fmt.Sprintf("The control plane endpoint host is unavailable. See %s", fullRunPingPodLogPath),
+					},
+				},
+
+				{
+					Pass: &singleOutcome{
+						When:    "true",
+						Message: "Control plane IP verified.",
+					},
+				},
+			},
+		},
+	}
+}
+
+// vcenterSessionValidateAnalyzer analyzes whether the vcenter user has Session validate permissions for CAPV
+// to be able to look up existing valid sessions to reuse them instead of having to create new ones.
+func (a *analyzerFactory) vcenterSessionValidatePermissionAnalyzer() *Analyze {
+	capvManagerPod := "capv-controller-manager-*"
+	capvManagerContainerLogFile := capvManagerPod + ".log"
+	fullManagerPodLogPath := path.Join(logpath(constants.CapvSystemNamespace), capvManagerContainerLogFile)
+	return &Analyze{
+		TextAnalyze: &textAnalyze{
+			analyzeMeta: analyzeMeta{
+				CheckName: fmt.Sprintf("%s:  Session Validate permission missing. Log: %s", logAnalysisAnalyzerPrefix, fullManagerPodLogPath),
+			},
+			FileName:     fullManagerPodLogPath,
+			RegexPattern: `session "msg"="error checking if session is active" "error"="ServerFaultCode: Permission to perform this operation was denied."`,
+			Outcomes: []*outcome{
+				{
+					Fail: &singleOutcome{
+						When:    "true",
+						Message: fmt.Sprintf("VCenter user doesn't have Sessions.ValidateSession permission. See %s", fullManagerPodLogPath),
+					},
+				},
+
+				{
+					Pass: &singleOutcome{
+						When:    "false",
+						Message: "VCenter user has Sessions.ValidateSession permission.",
+					},
+				},
+			},
+		},
+	}
+}
+
+// vmsAccessAnalyzer will analyze if vms have access to the API server of vSphere cluster
+// not used yet but it will once the workflows are updated to support this usecase.
+func (a *analyzerFactory) vmsAccessAnalyzer() *Analyze { //nolint:unused
+	runBashPod := "check-cloud-controller"
+	runBashPodLog := fmt.Sprintf("%s.log", runBashPod)
+	vSphereCloudControllerPodLogPath := path.Join(runBashPod, runBashPodLog)
+	return &Analyze{
+		TextAnalyze: &textAnalyze{
+			analyzeMeta: analyzeMeta{
+				CheckName: fmt.Sprintf("%s: Virtual Machine has no access to vSphere API server. Logs: %s", logAnalysisAnalyzerPrefix, vSphereCloudControllerPodLogPath),
+			},
+			FileName:     vSphereCloudControllerPodLogPath,
+			RegexPattern: `Failed to create new client. err: Post (.*) dial tcp (.*) connect: connection timed out\n(.*)Failed to create govmomi client. err: Post (.*) dial tcp (.*) connect: connection timed out`,
+			Outcomes: []*outcome{
+				{
+					Fail: &singleOutcome{
+						When:    "true",
+						Message: fmt.Sprintf("Failed to create client, Virtural Machines have no access to vSphere API server. See the cloud controller log in control plane node: %s", vSphereCloudControllerPodLogPath),
+					},
+				},
+				{
+					Pass: &singleOutcome{
+						When:    "false",
+						Message: fmt.Sprintf("Virtual Machines have access to vSphere API server. See %s \nPlease ignore the result when this analyzer is running on bootstrap cluster", vSphereCloudControllerPodLogPath),
+					},
+				},
+			},
 		},
 	}
 }
